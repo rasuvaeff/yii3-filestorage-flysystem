@@ -1,0 +1,21 @@
+{
+    "$schema": "vendor/infection/infection/resources/schema.json",
+    "source": {
+        "directories": ["src"]
+    },
+    "logs": {
+        "text": "php://stderr",
+        "summary": "build/infection-summary.log"
+    },
+    "testFramework": "testo",
+    // 88, and no mutator is ignored — what the suite honestly achieves. The
+    // survivors are documented in AGENTS.md: null-safe operators whose null
+    // branch PHP's stream-wrapper lifecycle makes unreachable, `max(0, …)`
+    // floors, and a pre-write byte check that is observationally identical to
+    // the post-write one. If a change makes a group disappear, raise this; if
+    // one adds an escapee outside them, the gate fails at 88.
+    "minMsi": 88,
+    "mutators": {
+        "@default": true
+    }
+}

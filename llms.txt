@@ -1,0 +1,118 @@
+# rasuvaeff/yii3-filestorage-flysystem
+
+Flysystem object store for `rasuvaeff/yii3-filestorage`. Namespace
+`Rasuvaeff\Yii3FilestorageFlysystem\`. PHP 8.3–8.5, `league/flysystem` ^3.29.
+
+## Install
+
+```bash
+composer require rasuvaeff/yii3-filestorage-flysystem
+```
+
+Binds `StoreInterface` only. Does NOT bind `StorageInterface` (core's),
+`RepositoryInterface` (`-db`'s), `FilesystemOperator` or
+`TemporaryUrlOptionsInterface` (the application's).
+
+## Rules
+
+1. **Capabilities are results, not conditional interfaces.** `publicUrl()` and
+   `temporaryUrl()` return `null` when the adapter cannot mint one. One class
+   wraps every adapter.
+2. **In Flysystem 3 the URL methods are `@method` annotations**, not interface
+   declarations — an operator may not have them. Check with `method_exists()`
+   before calling; a missing one is a fatal, not an exception.
+3. **No `RangeReadableStoreInterface`.** No range primitive exists, and an S3
+   body is not seekable. `-web` serves ranges from a seekable stream anyway.
+4. **No presigned URL without a `TemporaryUrlOptionsInterface`.** A URL that
+   cannot carry the delivery policy would serve uploaded HTML inline from your
+   bucket; returning null sends the caller to the proxy route instead.
+5. **Deduplication needs `AdapterSemantics`, and both flags must be true.**
+   Never probe with `fileExists()` + `write()` — that is the race.
+6. **Byte caps are checked before the write and verified after it.** A remote
+   PUT has no abort.
+
+## API reference
+
+### `FlysystemStore`
+
+Implements `StoreUrlProviderInterface` (which extends `StoreInterface`) and
+`MaintenanceStoreInterface`.
+
+```php
+new FlysystemStore(
+    string $name,                                    // /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
+    FilesystemOperator $filesystem,
+    StreamFactoryInterface $streamFactory,
+    ?TemporaryUrlOptionsInterface $temporaryUrlOptions = null,
+);
+```
+
+| Method | Notes |
+|---|---|
+| `write(Upload, string $group, PathGeneratorInterface, ?string $mediaType, int $maxBytes)` | `StoreException` on a path collision — never silent sharing. `UploadTooLargeException` before the write for a known-oversized body, after it for one that under-reported (object removed) |
+| `delete(File)` | Deletes the file's *directory* prefix — derivatives included |
+| `exists()` / `size()` / `lastModified()` / `stream()` | `null` / `false` on a missing object, never an exception |
+| `publicUrl(File)` | `null` when the adapter has no generator or returns an empty string |
+| `temporaryUrl(File, DateTimeImmutable, DeliveryOptions)` | `null` without an options mapper, or when the generator refuses |
+| `objects(?string $afterPath, int $limit)` | Path-ordered, resumable inventory of `StoredObjectId` |
+| `deleteObject(StoredObjectId)` | Idempotent |
+
+### `FlysystemContentAddressableStore`
+
+Adds `ContentAddressableStoreInterface`; delegates everything else to a
+`FlysystemStore`.
+
+```php
+new FlysystemContentAddressableStore(
+    FlysystemStore $store,
+    FilesystemOperator $filesystem,
+    AdapterSemantics $semantics,
+);
+
+$result = $store->putIfAbsent($upload, $storedObjectId, $maxBytes);
+// created: true  → bytes published
+// created: false → bytes were already there, length verified
+```
+
+A stored length that disagrees with the upload is a `StoreException`: the key is
+the hash, so a mismatch means something else wrote that key.
+`semantics()` returns the declaration, for diagnostics.
+
+### `AdapterSemantics`
+
+```php
+AdapterSemantics::guaranteed();                    // both true
+new AdapterSemantics(atomicVisibility: true, immutableContentKeys: true);
+```
+
+Anything less throws `InvalidArgumentException`. No permissive default.
+
+### `Url\TemporaryUrlOptionsInterface` / `Url\S3TemporaryUrlOptions`
+
+```php
+interface TemporaryUrlOptionsInterface
+{
+    /** @return array<string, mixed>|null Flysystem config, or null to issue no URL. */
+    public function for(DeliveryOptions $options): ?array;
+}
+```
+
+`S3TemporaryUrlOptions` emits
+`['get_object_options' => ['ResponseContentType' => …, 'ResponseContentDisposition' => …]]`,
+which `AwsS3V3Adapter::temporaryUrl()` signs into the presigned `GetObject`.
+Disposition follows RFC 6266: a quote-safe ASCII `filename` plus a
+percent-encoded `filename*`.
+
+### `Stream\StreamWrapper` (`@internal`)
+
+`StreamWrapper::wrap(StreamInterface): resource` — exposes the upload to
+Flysystem's `writeStream()` without copying it into `php://temp` first. Closing
+the resource does not close the upload's stream.
+
+## Params
+
+```php
+'rasuvaeff/yii3-filestorage-flysystem' => [
+    'name' => 'flysystem',   // becomes File::$storeName
+],
+```
