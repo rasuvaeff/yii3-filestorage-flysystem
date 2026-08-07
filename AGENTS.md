@@ -57,7 +57,19 @@ MinIO for the integration suite and the S3 example:
 docker run -d --name minio -p 9000:9000 \
   -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
   quay.io/minio/minio server /data
+until curl -fs http://127.0.0.1:9000/minio/health/live >/dev/null; do sleep 1; done
+make test-integration
 ```
+
+`make test-integration` supplies the four `FILESTORAGE_S3_*` variables itself,
+defaulting to that container, and runs with `--network host` — the suite talks
+to the host's `127.0.0.1:9000`, which is not the container's. Override any of
+them from the environment to point at something else.
+
+**A skipped run is not a passing run, and Testo says which is which.** With no
+endpoint configured the five tests report **risky**, not passed. If you see
+`5 passed`, MinIO was really reached; if you see `5 risky`, nothing was tested.
+Check the word before believing the colour.
 
 `composer.lock` is gitignored (library).
 

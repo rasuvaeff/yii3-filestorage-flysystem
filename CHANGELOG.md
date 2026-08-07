@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial development. Not released.
 
+- `make test-integration` now actually reaches MinIO. It ran the container's own
+  `127.0.0.1` with no `--network host` and supplied none of the four
+  `FILESTORAGE_S3_*` variables, so the documented recipe produced five *risky*
+  tests — which a reader skims as a pass. The target now runs on host networking
+  with the monorepo-root mount and defaults the variables to the documented
+  container, each overridable from the environment.
+
 - `FlysystemStore`: the store contract over any Flysystem adapter, with
   maintenance inventory and public/presigned URLs reported as nullable results
   rather than as interfaces that cannot vary at runtime.
