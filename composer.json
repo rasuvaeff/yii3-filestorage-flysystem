@@ -47,17 +47,6 @@
     "suggest": {
         "league/flysystem-aws-s3-v3": "Store objects in S3 or any S3-compatible service, with presigned URLs"
     },
-    "repositories": [
-        {
-            "type": "path",
-            "url": "../yii3-filestorage",
-            "options": {
-                "versions": {
-                    "rasuvaeff/yii3-filestorage": "0.1.0"
-                }
-            }
-        }
-    ],
     "autoload": {
         "psr-4": {
             "Rasuvaeff\\Yii3FilestorageFlysystem\\": "src/"

@@ -16,10 +16,12 @@ use Rasuvaeff\Yii3Filestorage\Store\RangeReadableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
 use Rasuvaeff\Yii3Filestorage\Store\StoreUrlProviderInterface;
 use Rasuvaeff\Yii3Filestorage\Upload;
+use Rasuvaeff\Yii3FilestorageFlysystem\AdapterSemantics;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\FixedPathGenerator;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\Fixtures;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\StubUrlGenerator;
+use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\UnreachableFilesystem;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\UnsizedStream;
 use Rasuvaeff\Yii3FilestorageFlysystem\Url\S3TemporaryUrlOptions;
 use Testo\Assert;
@@ -421,5 +423,73 @@ final class FlysystemStoreTest
             publicUrlGenerator: $generator,
             temporaryUrlGenerator: $generator,
         );
+    }
+
+    /**
+     * Null means the object is not there. A transport failure is not that —
+     * and swallowing every FilesystemException made a reset connection, an
+     * expired credential and a throttling response indistinguishable from a
+     * missing key. The download action reads null as "gone" and answers 404 for
+     * a live file; verify reports a whole directory as missing during an
+     * outage.
+     */
+    public function anUnreachableStoreIsNotAMissingObject(): void
+    {
+        $store = new FlysystemStore('flysystem', new UnreachableFilesystem(), Fixtures::factory());
+
+        Expect::exception(StoreException::class)->withMessageContaining('could not be reached');
+
+        $store->stream(Fixtures::file());
+    }
+
+    /**
+     * The third case, and the one silence hid best: the store answers, the
+     * object is there, and the read still failed. Reporting that as "missing"
+     * sends an operator looking for a lost file that is not lost.
+     */
+    public function anUnreadablePresentObjectIsNotAMissingOne(): void
+    {
+        $store = new FlysystemStore(
+            'flysystem',
+            new UnreachableFilesystem(existenceAnswers: true),
+            Fixtures::factory(),
+        );
+
+        Expect::exception(StoreException::class)->withMessageContaining('but could not be read');
+
+        $store->stream(Fixtures::file());
+    }
+
+    public function aGenuinelyMissingObjectStillStreamsAsNull(): void
+    {
+        Assert::null($this->store->stream(Fixtures::file(relativePath: 'nothing/here/original.bin')));
+    }
+
+    /**
+     * sortByPath() is toArray() + usort(), so it materialises and orders the
+     * whole bucket before the first yield — and gc calls objects() once per
+     * page. Declaring the adapter already ordered skips it; the listing must
+     * come out the same either way.
+     */
+    public function anOrderedAdapterIsNotSortedAgain(): void
+    {
+        foreach (['b/original.bin', 'a/original.bin', 'c/original.bin'] as $path) {
+            $this->filesystem->write($path, 'x');
+        }
+
+        $declared = new FlysystemStore(
+            'flysystem',
+            $this->filesystem,
+            Fixtures::factory(),
+            semantics: AdapterSemantics::guaranteed(orderedListing: true),
+        );
+
+        $paths = array_map(
+            static fn(StoredObjectId $id): string => $id->relativePath,
+            iterator_to_array($declared->objects(), false),
+        );
+        sort($paths);
+
+        Assert::same($paths, ['a/original.bin', 'b/original.bin', 'c/original.bin']);
     }
 }

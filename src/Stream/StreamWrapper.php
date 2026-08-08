@@ -108,18 +108,31 @@ final class StreamWrapper
     }
 
     /**
-     * @return array<int|string, int|false>
+     * @return array<int|string, int>|false
      */
-    public function stream_stat(): array
+    public function stream_stat(): array|false
     {
         $size = $this->stream?->getSize();
+        if ($size === null) {
+            // Not zero, and not a missing key either — PHP zero-fills the
+            // statbuf, so both read back as "0 bytes". `false` is how a stream
+            // says it does not know.
+            //
+            // This is load-bearing for S3. `ObjectUploader::requiresMultipart()`
+            // branches on `getSize() !== null`, and Guzzle's Stream::getSize()
+            // reads `fstat()['size']` straight through — so reporting zero
+            // told the SDK the body was of known length and sent every upload,
+            // whatever its size, as one PutObject. The whole multipart path
+            // was unreachable and a 6 GiB body failed with EntityTooLarge.
+            return false;
+        }
 
         // `size` is the only field anything downstream reads; the rest are
         // present because `fstat()` callers index into the numeric half.
         return [
             'dev' => 0, 'ino' => 0, 'mode' => 0o100_444, 'nlink' => 0,
             'uid' => 0, 'gid' => 0, 'rdev' => 0,
-            'size' => $size ?? 0,
+            'size' => $size,
             'atime' => 0, 'mtime' => 0, 'ctime' => 0,
             'blksize' => -1, 'blocks' => -1,
         ];

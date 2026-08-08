@@ -40,12 +40,19 @@ final readonly class AdapterSemantics
      *        the content-addressed prefix, and it never rewrites a key. False
      *        the moment a bucket is shared with a process that can overwrite
      *        arbitrary paths, or a lifecycle rule rewrites objects in place.
+     * @param bool $orderedListing The adapter lists paths in `strcmp` order.
+     *        True for S3 and S3-compatible services, which return keys in UTF-8
+     *        binary order; false for a local filesystem, which returns
+     *        directory order. Left false by default because getting it wrong
+     *        makes a resumable inventory skip objects — and the cost of the
+     *        safe answer is a sort, not a wrong result.
      *
      * @throws InvalidArgumentException
      */
     public function __construct(
         public bool $atomicVisibility,
         public bool $immutableContentKeys,
+        public bool $orderedListing = false,
     ) {
         if (!$atomicVisibility || !$immutableContentKeys) {
             throw new InvalidArgumentException(
@@ -59,8 +66,12 @@ final readonly class AdapterSemantics
     /**
      * Reads as an assertion at the call site, which is what it is.
      */
-    public static function guaranteed(): self
+    public static function guaranteed(bool $orderedListing = false): self
     {
-        return new self(atomicVisibility: true, immutableContentKeys: true);
+        return new self(
+            atomicVisibility: true,
+            immutableContentKeys: true,
+            orderedListing: $orderedListing,
+        );
     }
 }

@@ -44,6 +44,8 @@ final readonly class FlysystemContentAddressableStore implements
     MaintenanceStoreInterface,
     StoreUrlProviderInterface
 {
+    private const int MEASURE_CHUNK = 262_144;
+
     public function __construct(
         private FlysystemStore $store,
         private FilesystemOperator $filesystem,
@@ -65,6 +67,28 @@ final readonly class FlysystemContentAddressableStore implements
      * {@see AdapterSemantics::$atomicVisibility} is the promise that a reader
      * in between sees one whole object or none.
      */
+    /**
+     * Counts an upload that does not report its own length.
+     *
+     * @return int<0, max>
+     */
+    private function measure(Upload $upload): int
+    {
+        $stream = $upload->stream();
+        $counted = 0;
+        while (!$stream->eof()) {
+            $chunk = $stream->read(self::MEASURE_CHUNK);
+            if ($chunk === '') {
+                break;
+            }
+
+            $counted += \strlen($chunk);
+        }
+        $stream->rewind();
+
+        return $counted;
+    }
+
     #[Override]
     public function putIfAbsent(Upload $upload, StoredObjectId $object, int $maxBytes = 0): StoreResult
     {
@@ -81,10 +105,29 @@ final readonly class FlysystemContentAddressableStore implements
             if ($this->filesystem->fileExists($path)) {
                 $existing = max(0, $this->filesystem->fileSize($path));
 
-                if ($declared !== null && $existing !== $declared) {
+                // Counted when the body does not declare a length, rather than
+                // skipped. The contract says bytes are reused only after a size
+                // check, and "the upload did not say" is the ordinary case for
+                // a stream — so skipping it made the guarantee vacuous exactly
+                // where it was needed. Counting is a local read of a rewound,
+                // seekable stream; this branch transfers nothing, so it stays
+                // far cheaper than the upload it avoids.
+                $actual = $declared ?? $this->measure($upload);
+
+                if ($existing !== $actual) {
                     throw new StoreException(
                         "Content-addressed object \"{$path}\" holds {$existing} bytes but the upload is "
-                        . "{$declared}. Something outside this package wrote that key",
+                        . "{$actual}. Something outside this package wrote that key",
+                    );
+                }
+
+                if ($maxBytes > 0 && $existing > $maxBytes) {
+                    // The cap is about what this caller may store, not about
+                    // how the bytes got there. Reusing past it would let a
+                    // group's limit be bypassed by anything that uploaded the
+                    // same content under a laxer one.
+                    throw new UploadTooLargeException(
+                        "Upload of {$existing} bytes exceeds the {$maxBytes} byte limit",
                     );
                 }
 

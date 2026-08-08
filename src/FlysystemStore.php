@@ -9,6 +9,7 @@ use InvalidArgumentException;
 use League\Flysystem\FilesystemException;
 use League\Flysystem\FilesystemOperator;
 use League\Flysystem\StorageAttributes;
+use League\Flysystem\UnableToReadFile;
 use Override;
 use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Http\Message\StreamInterface;
@@ -75,6 +76,7 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
         private FilesystemOperator $filesystem,
         private StreamFactoryInterface $streamFactory,
         private ?TemporaryUrlOptionsInterface $temporaryUrlOptions = null,
+        private ?AdapterSemantics $semantics = null,
     ) {
         if ($name === '' || preg_match(self::NAME_PATTERN, $name) !== 1) {
             throw new InvalidArgumentException("Invalid store name \"{$name}\"");
@@ -196,6 +198,15 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
         }
     }
 
+    /**
+     * Null means the object is not there. A transport failure is *not* that.
+     *
+     * Swallowing every `FilesystemException` made a reset connection, an
+     * expired credential and a throttling response indistinguishable from a
+     * missing key — and the callers read null as "gone": the download action
+     * answers 404 for a live file, and `filestorage:verify` reports a whole
+     * directory as missing during an outage.
+     */
     #[Override]
     public function stream(File $file): ?StreamInterface
     {
@@ -203,9 +214,39 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
             return $this->streamFactory->createStreamFromResource(
                 $this->filesystem->readStream($file->relativePath),
             );
-        } catch (FilesystemException) {
-            return null;
+        } catch (UnableToReadFile $e) {
+            return $this->absentOrFailed($file->relativePath, $e);
         }
+    }
+
+    /**
+     * Distinguishes "no such key" from "the store could not answer".
+     *
+     * Flysystem reports both as `UnableToReadFile`, so the only way to tell
+     * them apart is to ask again — and `fileExists()` failing in turn is
+     * itself the answer: the store is unreachable.
+     *
+     * @throws StoreException
+     */
+    private function absentOrFailed(string $path, FilesystemException $e): null
+    {
+        try {
+            if (!$this->filesystem->fileExists($path)) {
+                return null;
+            }
+        } catch (FilesystemException $probe) {
+            throw new StoreException(
+                "Store \"{$this->name}\" could not be reached while reading \"{$path}\"",
+                0,
+                $probe,
+            );
+        }
+
+        throw new StoreException(
+            "Object \"{$path}\" exists in store \"{$this->name}\" but could not be read",
+            0,
+            $e,
+        );
     }
 
     #[Override]
@@ -260,8 +301,23 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
         try {
             $yielded = 0;
 
+            // Not sortByPath(): that is toArray() + usort() under the hood, so
+            // it materialises and orders the entire bucket before the first
+            // yield — and `filestorage:gc` calls this once per page, which
+            // turns a resumable cursor into a full listing per page and an
+            // out-of-memory failure on a large store.
+            //
+            // The cursor needs the listing to be in strcmp order, and whether
+            // it is belongs to the adapter: S3 returns keys in UTF-8 binary
+            // order, a local filesystem returns directory order. The package
+            // cannot verify that, so the application declares it the same way
+            // it declares atomicity and immutability — and when it has not,
+            // this falls back to sorting and pays the price knowingly.
+            $listing = $this->filesystem->listContents('', true);
+            $entries = $this->semantics?->orderedListing === true ? $listing : $listing->sortByPath();
+
             /** @var StorageAttributes $attributes */
-            foreach ($this->filesystem->listContents('', true)->sortByPath() as $attributes) {
+            foreach ($entries as $attributes) {
                 if (!$attributes->isFile()) {
                     continue;
                 }

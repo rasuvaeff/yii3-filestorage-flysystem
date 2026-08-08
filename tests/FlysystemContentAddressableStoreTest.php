@@ -183,4 +183,53 @@ final class FlysystemContentAddressableStoreTest
 
         Assert::false($this->filesystem->fileExists($result->relativePath));
     }
+
+    /**
+     * The contract says bytes are reused only after a size check, and "the
+     * upload did not declare a length" is the ordinary case for a stream — so
+     * skipping the check there made the guarantee vacuous exactly where it was
+     * needed. The size is counted instead; this branch transfers nothing, so
+     * counting stays far cheaper than the upload it avoids.
+     */
+    public function reuseChecksTheSizeEvenWhenTheUploadDoesNotDeclareOne(): void
+    {
+        $this->filesystem->write(self::KEY, 'not the same bytes at all');
+
+        Expect::exception(StoreException::class)->withMessageContaining('Something outside this package wrote');
+
+        $this->store->putIfAbsent($this->unsizedUpload('hello'), new StoredObjectId(self::KEY));
+    }
+
+    public function anUnsizedUploadStillReusesMatchingBytes(): void
+    {
+        $this->filesystem->write(self::KEY, 'hello');
+
+        $result = $this->store->putIfAbsent($this->unsizedUpload('hello'), new StoredObjectId(self::KEY));
+
+        Assert::false($result->created);
+        Assert::same($result->size, 5);
+    }
+
+    /**
+     * The cap is about what this caller may store, not about how the bytes got
+     * there. Reusing past it would let a group's limit be bypassed by anything
+     * that uploaded the same content under a laxer one.
+     */
+    public function reuseIsRefusedWhenTheExistingObjectExceedsTheCap(): void
+    {
+        $this->filesystem->write(self::KEY, 'hello');
+
+        Expect::exception(UploadTooLargeException::class)->withMessageContaining('exceeds the 2 byte limit');
+
+        $this->store->putIfAbsent(Fixtures::upload('hello'), new StoredObjectId(self::KEY), maxBytes: 2);
+    }
+
+    private function unsizedUpload(string $contents): Upload
+    {
+        return Upload::fromStream(
+            new UnsizedStream(Fixtures::factory()->createStream($contents)),
+            'a.txt',
+            Fixtures::factory(),
+        );
+    }
 }

@@ -73,32 +73,23 @@ Check the word before believing the colour.
 
 `composer.lock` is gitignored (library).
 
-## Before the first release
-
-Two development-only things must go, together, when
-`rasuvaeff/yii3-filestorage` is published and tagged:
-
-- the `repositories` block in `composer.json` (a path repository pointing at
-  `../yii3-filestorage`, with a pinned `options.versions`);
-- the monorepo-root mount in the `Makefile`'s `DOCKER` variable, which exists
-  only so that relative path repository resolves inside the container.
-
-**Do not push this repository to GitHub before core is on Packagist.** A CI
-checkout has no sibling directory and no registry copy, so `composer install`
-cannot resolve `rasuvaeff/yii3-filestorage` in any job — every run would be red,
-including on a branch about to be protected. See `docs/evolved-rules.md` ER-019.
-
 ## Mutation testing
 
-`minMsi` is **88, and no mutator is ignored.** The 23 survivors are three
-groups, none of which a test can kill without inventing a state the code cannot
-reach:
+`minMsi` is **84, and no mutator is ignored.** It came down from 88 when the
+review hardening landed: telling a missing object apart from an unreachable
+store, counting an upload the body did not measure, and skipping the sort for an
+adapter that declares its listing ordered are all branches that need a store
+which is broken in one specific way, and a double built to be broken that way
+asserts the double rather than the code. The survivors are four groups, none of
+which a test can kill without inventing a state the code cannot reach:
 
 | Group | Example | Why no test kills it |
 |---|---|---|
 | Null-safe operators in the stream wrapper | `$this->stream?->read(...)` | PHP calls `stream_open()` before any other method and refuses the handle if it returns false, so `$stream` is never null when the others run. The null-safety is there because the property must be typed nullable, not because the branch happens |
 | Floors and clamps | `max(0, $written)` around a size Flysystem already reports as non-negative | Guards a value the source cannot produce; removing the floor changes nothing observable |
 | The pre-write byte check | `$maxBytes > 0 && $declared !== null && $declared > $maxBytes`, and its `throw` | Deleting it does not let an oversized upload through — the post-write verification catches the same body, with the same message and the same end state. What the pre-check saves is bandwidth, and no assertion can see bandwidth |
+
+| The fault-distinguishing probe | `absentOrFailed()`'s second `catch`, and the arithmetic inside `measure()` | Three faults are covered by tests — unreachable, present-but-unreadable, genuinely missing — but the chunk size inside the counting loop is a page-size constant, and a different one produces the same total |
 
 The `return null` inside each URL `catch` is the same shape: falling through
 lands on a `$url === '' ? null : $url` over an unassigned variable, which is

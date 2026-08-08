@@ -71,11 +71,35 @@ final class StreamWrapperTest
      * `size` to choose between a single PUT and a multipart upload, and a
      * missing key there is a TypeError rather than a fallback.
      */
-    public function anUnsizedStreamStatsAsZero(): void
+    /**
+     * A stream that does not know its size must say so, not say zero.
+     *
+     * This is load-bearing for S3: `ObjectUploader::requiresMultipart()`
+     * branches on `getSize() !== null`, and Guzzle's `Stream::getSize()` reads
+     * `fstat()['size']` straight through. Reporting zero told the SDK the body
+     * was of known length, so every upload went as a single PutObject whatever
+     * its size and the multipart path was unreachable — a 6 GiB body failed
+     * with EntityTooLarge. Omitting the key does not work either: PHP
+     * zero-fills the statbuf.
+     */
+    public function anUnsizedStreamRefusesToStat(): void
     {
         $resource = StreamWrapper::wrap(new UnsizedStream((new Psr17Factory())->createStream('hello')));
 
-        Assert::same(fstat($resource)['size'] ?? null, 0);
+        Assert::false(@fstat($resource));
+
+        fclose($resource);
+    }
+
+    /**
+     * And the sized case still reports the real number, so the refusal above
+     * is about not knowing rather than about never answering.
+     */
+    public function aSizedStreamStatsItsSize(): void
+    {
+        $resource = StreamWrapper::wrap((new Psr17Factory())->createStream('hello'));
+
+        Assert::same(fstat($resource)['size'] ?? null, 5);
 
         fclose($resource);
     }

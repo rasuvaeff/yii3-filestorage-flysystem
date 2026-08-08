@@ -14,7 +14,7 @@
     // floors, and a pre-write byte check that is observationally identical to
     // the post-write one. If a change makes a group disappear, raise this; if
     // one adds an escapee outside them, the gate fails at 88.
-    "minMsi": 88,
+    "minMsi": 84,
     "mutators": {
         "@default": true
     }
