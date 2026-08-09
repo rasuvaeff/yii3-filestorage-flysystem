@@ -109,21 +109,6 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true') }}
     runs-on: ubuntu-latest
 
-    services:
-      minio:
-        # Pinned by digest for reproducible CI. Bump deliberately.
-        image: quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
-        ports:
-          - 9000:9000
-        env:
-          MINIO_ROOT_USER: minioadmin
-          MINIO_ROOT_PASSWORD: minioadmin
-        options: >-
-          --health-cmd "mc ready local"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
-
     env:
       FILESTORAGE_S3_ENDPOINT: http://127.0.0.1:9000
       FILESTORAGE_S3_KEY: minioadmin
@@ -153,6 +138,16 @@ jobs:
 
       - name: Install dependencies
         run: composer install --no-interaction --no-progress --prefer-dist
+
+      # `services:` cannot pass a command, and this image needs one
+      # ("server /data") — a bare services entry runs it argument-less, which
+      # prints help and exits without ever starting the server.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e \
+            server /data
 
       # The suite skips when the endpoint is unreachable, which would make a
       # broken service container look like a pass. Fail here instead.
