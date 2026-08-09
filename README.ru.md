@@ -122,8 +122,13 @@ RFC 6266: ASCII-фолбэк, безопасный к кавычкам, плюс
 — поэтому их объявляет приложение, и класс отказывается существовать без обеих:
 
 ```php
+use League\Flysystem\FilesystemOperator;
+use Psr\Http\Message\StreamFactoryInterface;
+use Rasuvaeff\Yii3Filestorage\Store\StoreInterface;
 use Rasuvaeff\Yii3FilestorageFlysystem\AdapterSemantics;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemContentAddressableStore;
+use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore;
+use Rasuvaeff\Yii3FilestorageFlysystem\Url\S3TemporaryUrlOptions;
 
 return [
     StoreInterface::class => static fn (
@@ -173,7 +178,7 @@ PHP и Composer на хосте нет — всё через Docker.
 
 ```bash
 make build             # validate, normalize, require-checker, cs, psalm, test
-make test-integration  # против настоящего S3-endpoint; без него пропускает себя
+make test-integration  # против настоящего S3-endpoint; нужен доступный MinIO
 make cs-fix
 make mutation
 make release-check

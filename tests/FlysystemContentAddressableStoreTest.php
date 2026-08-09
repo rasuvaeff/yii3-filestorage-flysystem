@@ -15,6 +15,7 @@ use Rasuvaeff\Yii3Filestorage\Upload;
 use Rasuvaeff\Yii3FilestorageFlysystem\AdapterSemantics;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemContentAddressableStore;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore;
+use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\FixedSizeStream;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\Fixtures;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\UnsizedStream;
 use Testo\Assert;
@@ -211,9 +212,49 @@ final class FlysystemContentAddressableStoreTest
     }
 
     /**
+     * A declared size is trusted for the reuse comparison rather than
+     * re-measured: measuring is a local read of the whole stream, so paying
+     * for it when the upload already states its length would be wasted work
+     * on every reuse.
+     */
+    public function reuseTrustsADeclaredSizeWithoutMeasuring(): void
+    {
+        $existingBytes = str_repeat('y', 999);
+        $this->filesystem->write(self::KEY, $existingBytes);
+
+        $factory = Fixtures::factory();
+        $upload = Upload::fromStream(new FixedSizeStream($factory->createStream('hello'), 999), 'a.bin', $factory);
+
+        $result = $this->store->putIfAbsent($upload, new StoredObjectId(self::KEY));
+
+        Assert::false($result->created);
+        Assert::same($result->size, 999);
+    }
+
+    /**
+     * `measure()` reads in fixed-size chunks and accumulates the total; a body
+     * spanning more than one chunk is what makes accumulation observable
+     * rather than just the last chunk's length.
+     */
+    public function anUnsizedUploadOverMultipleMeasuringChunksStillCountsTheWhole(): void
+    {
+        $contents = str_repeat('x', 300_000); // over the 262,144-byte measuring chunk
+        $this->filesystem->write(self::KEY, $contents);
+
+        $result = $this->store->putIfAbsent($this->unsizedUpload($contents), new StoredObjectId(self::KEY));
+
+        Assert::false($result->created);
+        Assert::same($result->size, 300_000);
+    }
+
+    /**
      * The cap is about what this caller may store, not about how the bytes got
      * there. Reusing past it would let a group's limit be bypassed by anything
      * that uploaded the same content under a laxer one.
+     *
+     * Unsized on purpose: a declared size over the cap is refused by the
+     * pre-write check before the reuse branch is ever reached, which would
+     * test that check instead of this one.
      */
     public function reuseIsRefusedWhenTheExistingObjectExceedsTheCap(): void
     {
@@ -221,7 +262,21 @@ final class FlysystemContentAddressableStoreTest
 
         Expect::exception(UploadTooLargeException::class)->withMessageContaining('exceeds the 2 byte limit');
 
-        $this->store->putIfAbsent(Fixtures::upload('hello'), new StoredObjectId(self::KEY), maxBytes: 2);
+        $this->store->putIfAbsent($this->unsizedUpload('hello'), new StoredObjectId(self::KEY), maxBytes: 2);
+    }
+
+    /**
+     * At the cap, not over it — the reuse branch's own boundary, distinct from
+     * {@see abodyExactlyAtTheCapIsAccepted()}'s pre-write one.
+     */
+    public function reuseAtExactlyTheCapIsAccepted(): void
+    {
+        $this->filesystem->write(self::KEY, 'hello');
+
+        $result = $this->store->putIfAbsent($this->unsizedUpload('hello'), new StoredObjectId(self::KEY), maxBytes: 5);
+
+        Assert::false($result->created);
+        Assert::same($result->size, 5);
     }
 
     private function unsizedUpload(string $contents): Upload

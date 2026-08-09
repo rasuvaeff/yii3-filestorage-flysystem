@@ -75,13 +75,16 @@ $options = DeliveryOptions::fromFile(
     policy: new DeliveryPolicy(allowDirectPublicUrl: false, forceDownload: true),
 );
 $url = $store->temporaryUrl($file, new DateTimeImmutable('+10 minutes'), $options);
+if ($url === null) {
+    throw new RuntimeException('Could not create a presigned URL');
+}
 
 echo "presigned URL:\n  {$url}\n\n";
 
 // The policy is signed into the URL, so S3 returns it on the response — a
 // download, with the original filename, whatever the object's stored metadata
 // happens to say.
-$body = file_get_contents((string) $url, false, stream_context_create(['http' => ['ignore_errors' => true]]));
+$body = file_get_contents($url, false, stream_context_create(['http' => ['ignore_errors' => true]]));
 foreach ($http_response_header ?? [] as $header) {
     if (stripos($header, 'content-disposition') === 0 || stripos($header, 'content-type') === 0) {
         echo "response: {$header}\n";

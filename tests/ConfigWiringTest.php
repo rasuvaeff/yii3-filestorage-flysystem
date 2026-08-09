@@ -113,7 +113,7 @@ final class ConfigWiringTest
         $definitions[StreamFactoryInterface::class] = Psr17Factory::class;
         $definitions[FilesystemOperator::class] = static fn(): FilesystemOperator => Fixtures::filesystem();
 
-        return new Container(ContainerConfig::create()->withDefinitions($definitions + $extra));
+        return new Container(ContainerConfig::create()->withDefinitions($extra + $definitions));
     }
 
     /**

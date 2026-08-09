@@ -17,6 +17,7 @@ use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\Fixtures;
 use Rasuvaeff\Yii3FilestorageFlysystem\Url\S3TemporaryUrlOptions;
 use Testo\Assert;
 use Testo\Codecov\CoversNothing;
+use Testo\Core\Exception\SkipTest;
 use Testo\Lifecycle\BeforeTest;
 use Testo\Test;
 
@@ -85,19 +86,17 @@ final class MinioIntegrationTest
 
     public function writesReadsAndDeletesAgainstARealBucket(): void
     {
-        if (!$this->store instanceof \Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore) {
-            return;
-        }
+        $store = $this->requireStore();
 
-        $result = $this->store->write(Fixtures::upload('hello'), 'common', new RandomPathGenerator());
+        $result = $store->write(Fixtures::upload('hello'), 'common', new RandomPathGenerator());
         $file = Fixtures::file(relativePath: $result->relativePath, storeName: 'minio');
 
         Assert::same($result->size, 5);
-        Assert::true($this->store->exists($file));
-        Assert::same((string) $this->store->stream($file)?->getContents(), 'hello');
+        Assert::true($store->exists($file));
+        Assert::same((string) $store->stream($file)?->getContents(), 'hello');
 
-        $this->store->delete($file);
-        Assert::false($this->store->exists($file));
+        $store->delete($file);
+        Assert::false($store->exists($file));
     }
 
     /**
@@ -107,19 +106,17 @@ final class MinioIntegrationTest
      */
     public function amultipartSizedBodyUploadsIntact(): void
     {
-        if (!$this->store instanceof \Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore) {
-            return;
-        }
+        $store = $this->requireStore();
 
         $contents = str_repeat('abcdefgh', 1_500_000); // 12 MB, over the 5 MB part size
-        $result = $this->store->write(Fixtures::upload($contents), 'common', new RandomPathGenerator());
+        $result = $store->write(Fixtures::upload($contents), 'common', new RandomPathGenerator());
         $file = Fixtures::file(relativePath: $result->relativePath, storeName: 'minio');
 
         Assert::same($result->size, strlen($contents));
-        Assert::same($this->store->size($file), strlen($contents));
-        Assert::same(md5((string) $this->store->stream($file)?->getContents()), md5($contents));
+        Assert::same($store->size($file), strlen($contents));
+        Assert::same(md5((string) $store->stream($file)?->getContents()), md5($contents));
 
-        $this->store->delete($file);
+        $store->delete($file);
     }
 
     /**
@@ -129,14 +126,12 @@ final class MinioIntegrationTest
      */
     public function aPresignedUrlCarriesTheDeliveryPolicy(): void
     {
-        if (!$this->store instanceof \Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore) {
-            return;
-        }
+        $store = $this->requireStore();
 
-        $result = $this->store->write(Fixtures::upload('hello'), 'common', new RandomPathGenerator());
+        $result = $store->write(Fixtures::upload('hello'), 'common', new RandomPathGenerator());
         $file = Fixtures::file(relativePath: $result->relativePath, storeName: 'minio');
 
-        $url = $this->store->temporaryUrl($file, new DateTimeImmutable('+10 minutes'), Fixtures::deliveryOptions());
+        $url = $store->temporaryUrl($file, new DateTimeImmutable('+10 minutes'), Fixtures::deliveryOptions());
         Assert::true($url !== null);
 
         $context = stream_context_create(['http' => ['ignore_errors' => true]]);
@@ -147,7 +142,7 @@ final class MinioIntegrationTest
         Assert::string($headers)->contains('200');
         Assert::string(strtolower($headers))->contains('content-disposition: attachment');
 
-        $this->store->delete($file);
+        $store->delete($file);
     }
 
     /**
@@ -157,12 +152,13 @@ final class MinioIntegrationTest
      */
     public function contentAddressedWritesConvergeOnOneObject(): void
     {
-        if (!$this->filesystem instanceof \League\Flysystem\Filesystem || !$this->store instanceof \Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore) {
-            return;
+        $flysystemStore = $this->requireStore();
+        if (!$this->filesystem instanceof Filesystem) {
+            throw new SkipTest('MinIO endpoint not configured (FILESTORAGE_S3_ENDPOINT)');
         }
 
         $store = new FlysystemContentAddressableStore(
-            store: $this->store,
+            store: $flysystemStore,
             filesystem: $this->filesystem,
             semantics: AdapterSemantics::guaranteed(),
         );
@@ -180,19 +176,26 @@ final class MinioIntegrationTest
 
     public function theInventoryWalksTheBucket(): void
     {
-        if (!$this->store instanceof \Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore) {
-            return;
-        }
+        $store = $this->requireStore();
 
-        $result = $this->store->write(Fixtures::upload('hello'), 'common', new RandomPathGenerator());
+        $result = $store->write(Fixtures::upload('hello'), 'common', new RandomPathGenerator());
 
         $paths = array_map(
             static fn(StoredObjectId $o): string => $o->relativePath,
-            iterator_to_array($this->store->objects(), false),
+            iterator_to_array($store->objects(), false),
         );
 
         Assert::true(\in_array($result->relativePath, $paths, true));
 
-        $this->store->delete(Fixtures::file(relativePath: $result->relativePath, storeName: 'minio'));
+        $store->delete(Fixtures::file(relativePath: $result->relativePath, storeName: 'minio'));
+    }
+
+    private function requireStore(): FlysystemStore
+    {
+        if (!$this->store instanceof FlysystemStore) {
+            throw new SkipTest('MinIO endpoint not configured (FILESTORAGE_S3_ENDPOINT)');
+        }
+
+        return $this->store;
     }
 }

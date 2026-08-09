@@ -23,6 +23,7 @@ Start MinIO for the second script:
 docker run -d --name minio -p 9000:9000 \
   -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
   quay.io/minio/minio server /data
+until curl -fs http://127.0.0.1:9000/minio/health/live >/dev/null; do sleep 1; done
 
 FILESTORAGE_S3_ENDPOINT=http://127.0.0.1:9000 php examples/s3-presigned-urls.php
 ```

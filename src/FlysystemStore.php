@@ -9,7 +9,6 @@ use InvalidArgumentException;
 use League\Flysystem\FilesystemException;
 use League\Flysystem\FilesystemOperator;
 use League\Flysystem\StorageAttributes;
-use League\Flysystem\UnableToReadFile;
 use Override;
 use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Http\Message\StreamInterface;
@@ -168,13 +167,23 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
         }
     }
 
+    /**
+     * A transport failure is not "does not exist" either — see
+     * {@see absentOrFailed()}. `fileExists()` is already the cheapest possible
+     * probe, so there is nothing left to re-check it against: its own failure
+     * means the store could not be reached.
+     */
     #[Override]
     public function exists(File $file): bool
     {
         try {
             return $this->filesystem->fileExists($file->relativePath);
-        } catch (FilesystemException) {
-            return false;
+        } catch (FilesystemException $e) {
+            throw new StoreException(
+                "Could not determine whether \"{$file->relativePath}\" exists in store \"{$this->name}\"",
+                0,
+                $e,
+            );
         }
     }
 
@@ -183,8 +192,8 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
     {
         try {
             return max(0, $this->filesystem->fileSize($file->relativePath));
-        } catch (FilesystemException) {
-            return null;
+        } catch (FilesystemException $e) {
+            return $this->absentOrFailed($file->relativePath, $e);
         }
     }
 
@@ -193,8 +202,8 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
     {
         try {
             return new DateTimeImmutable('@' . $this->filesystem->lastModified($file->relativePath));
-        } catch (FilesystemException) {
-            return null;
+        } catch (FilesystemException $e) {
+            return $this->absentOrFailed($file->relativePath, $e);
         }
     }
 
@@ -214,7 +223,7 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
             return $this->streamFactory->createStreamFromResource(
                 $this->filesystem->readStream($file->relativePath),
             );
-        } catch (UnableToReadFile $e) {
+        } catch (FilesystemException $e) {
             return $this->absentOrFailed($file->relativePath, $e);
         }
     }

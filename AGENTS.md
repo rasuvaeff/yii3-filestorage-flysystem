@@ -43,7 +43,7 @@ No PHP/Composer on the host — run in Docker via the `composer:2` image.
 
 ```bash
 make build
-make test-integration   # needs FILESTORAGE_S3_ENDPOINT; skips itself without it
+make test-integration   # always resolves an endpoint; needs a reachable MinIO
 make cs-fix
 make psalm
 make test
@@ -64,36 +64,41 @@ make test-integration
 `make test-integration` supplies the four `FILESTORAGE_S3_*` variables itself,
 defaulting to that container, and runs with `--network host` — the suite talks
 to the host's `127.0.0.1:9000`, which is not the container's. Override any of
-them from the environment to point at something else.
+them from the environment to point at something else. Because `make` always
+supplies an endpoint, it never skips: with no MinIO reachable there, the S3
+client fails to connect inside `#[BeforeTest]` and Testo reports the affected
+tests **aborted**, not skipped.
 
-**A skipped run is not a passing run, and Testo says which is which.** With no
-endpoint configured the five tests report **risky**, not passed. If you see
-`5 passed`, MinIO was really reached; if you see `5 risky`, nothing was tested.
-Check the word before believing the colour.
+**Skipping is a bare `composer test:integration` behaviour.** Run directly,
+without `make` and with no `FILESTORAGE_S3_*` variable set, `FlysystemStore` is
+never constructed and every test throws `SkipTest`, which Testo reports as
+**skipped**. A skipped run is not a passing run, and Testo says which is which:
+if you see `5 passed`, MinIO was really reached; if you see `5 skipped`,
+nothing was tested. Check the word before believing the colour.
 
 `composer.lock` is gitignored (library).
 
 ## Mutation testing
 
-`minMsi` is **84, and no mutator is ignored.** It came down from 88 when the
-review hardening landed: telling a missing object apart from an unreachable
-store, counting an upload the body did not measure, and skipping the sort for an
-adapter that declares its listing ordered are all branches that need a store
-which is broken in one specific way, and a double built to be broken that way
-asserts the double rather than the code. The survivors are four groups, none of
-which a test can kill without inventing a state the code cannot reach:
+`minMsi` is **88, and no mutator is ignored** — 202 of 227 mutants killed. Every
+fault the store distinguishes has a test that breaks it that specific way:
+missing vs. unreachable vs. present-but-unreadable, a declared size trusted
+over a re-measurement, and the reuse cap's own boundary distinct from the
+pre-write one. The survivors are the groups below, none of which a test can
+kill without inventing a state the code cannot reach:
 
 | Group | Example | Why no test kills it |
 |---|---|---|
 | Null-safe operators in the stream wrapper | `$this->stream?->read(...)` | PHP calls `stream_open()` before any other method and refuses the handle if it returns false, so `$stream` is never null when the others run. The null-safety is there because the property must be typed nullable, not because the branch happens |
 | Floors and clamps | `max(0, $written)` around a size Flysystem already reports as non-negative | Guards a value the source cannot produce; removing the floor changes nothing observable |
-| The pre-write byte check | `$maxBytes > 0 && $declared !== null && $declared > $maxBytes`, and its `throw` | Deleting it does not let an oversized upload through — the post-write verification catches the same body, with the same message and the same end state. What the pre-check saves is bandwidth, and no assertion can see bandwidth |
+| The pre-write byte check | `$maxBytes > 0 && $declared !== null && $declared > $maxBytes`, and its `throw`, in both stores | Deleting it does not let an oversized upload through — the post-write verification catches the same body, with the same message and the same end state. What the pre-check saves is bandwidth, and no assertion can see bandwidth |
+| A redundant `rewind()` | `measure()`'s own `$stream->rewind()` | `Upload::stream()` already rewinds on every call, so nothing downstream can ever observe whether `measure()` also did |
+| Fields no caller reads | `'dev'` in the stat array; `use_include_path` in the `fopen()` call | `stream_stat()`'s own comment says only `size` matters to anything downstream; a custom stream-wrapper protocol never consults the include path either |
+| A nullsafe property read | `$this->semantics?->orderedListing` in `objects()` | Same shape as the stream wrapper's null-safe calls: reading a property through `->` on a null object is a PHP warning, not a fatal error, and evaluates to null either way |
 
-| The fault-distinguishing probe | `absentOrFailed()`'s second `catch`, and the arithmetic inside `measure()` | Three faults are covered by tests — unreachable, present-but-unreadable, genuinely missing — but the chunk size inside the counting loop is a page-size constant, and a different one produces the same total |
-
-The `return null` inside each URL `catch` is the same shape: falling through
-lands on a `$url === '' ? null : $url` over an unassigned variable, which is
-also null.
+The `return null` inside each URL `catch` (`publicUrl()`, `temporaryUrl()`) is
+the same shape: falling through lands on a `$url === '' ? null : $url` over an
+unassigned variable, which is also null.
 
 ## Invariants & gotchas
 

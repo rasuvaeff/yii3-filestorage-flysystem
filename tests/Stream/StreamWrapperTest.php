@@ -67,11 +67,6 @@ final class StreamWrapperTest
     }
 
     /**
-     * A stream that cannot report its length still has to stat: the SDK reads
-     * `size` to choose between a single PUT and a multipart upload, and a
-     * missing key there is a TypeError rather than a fallback.
-     */
-    /**
      * A stream that does not know its size must say so, not say zero.
      *
      * This is load-bearing for S3: `ObjectUploader::requiresMultipart()`

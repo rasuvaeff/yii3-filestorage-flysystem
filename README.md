@@ -123,8 +123,13 @@ bucket policy — so the application declares them, and the class refuses to exi
 without both:
 
 ```php
+use League\Flysystem\FilesystemOperator;
+use Psr\Http\Message\StreamFactoryInterface;
+use Rasuvaeff\Yii3Filestorage\Store\StoreInterface;
 use Rasuvaeff\Yii3FilestorageFlysystem\AdapterSemantics;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemContentAddressableStore;
+use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore;
+use Rasuvaeff\Yii3FilestorageFlysystem\Url\S3TemporaryUrlOptions;
 
 return [
     StoreInterface::class => static fn (
@@ -173,7 +178,7 @@ No PHP or Composer on the host; everything runs in Docker.
 
 ```bash
 make build             # validate, normalize, require-checker, cs, psalm, test
-make test-integration  # against a real S3 endpoint; skips itself without one
+make test-integration  # against a real S3 endpoint; needs MinIO reachable
 make cs-fix
 make mutation
 make release-check

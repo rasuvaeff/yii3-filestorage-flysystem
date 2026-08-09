@@ -7,6 +7,7 @@ namespace Rasuvaeff\Yii3FilestorageFlysystem\Tests;
 use DateTimeImmutable;
 use InvalidArgumentException;
 use League\Flysystem\Filesystem;
+use League\Flysystem\StorageAttributes;
 use Rasuvaeff\Yii3Filestorage\Exception\StoreException;
 use Rasuvaeff\Yii3Filestorage\Exception\UploadTooLargeException;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
@@ -437,7 +438,7 @@ final class FlysystemStoreTest
     {
         $store = new FlysystemStore('flysystem', new UnreachableFilesystem(), Fixtures::factory());
 
-        Expect::exception(StoreException::class)->withMessageContaining('could not be reached');
+        Expect::exception(StoreException::class)->withMessageContaining('could not be reached')->withCode(0);
 
         $store->stream(Fixtures::file());
     }
@@ -455,7 +456,7 @@ final class FlysystemStoreTest
             Fixtures::factory(),
         );
 
-        Expect::exception(StoreException::class)->withMessageContaining('but could not be read');
+        Expect::exception(StoreException::class)->withMessageContaining('but could not be read')->withCode(0);
 
         $store->stream(Fixtures::file());
     }
@@ -466,10 +467,68 @@ final class FlysystemStoreTest
     }
 
     /**
+     * exists() has no cheaper follow-up probe than itself, so its own failure
+     * is the answer: the store could not be reached.
+     */
+    public function anUnreachableStoreCannotAnswerWhetherAFileExists(): void
+    {
+        $store = new FlysystemStore('flysystem', new UnreachableFilesystem(), Fixtures::factory());
+
+        Expect::exception(StoreException::class)->withMessageContaining('Could not determine whether')->withCode(0);
+
+        $store->exists(Fixtures::file());
+    }
+
+    public function anUnreachableStoreIsNotAMissingObjectWhenReadingSize(): void
+    {
+        $store = new FlysystemStore('flysystem', new UnreachableFilesystem(), Fixtures::factory());
+
+        Expect::exception(StoreException::class)->withMessageContaining('could not be reached')->withCode(0);
+
+        $store->size(Fixtures::file());
+    }
+
+    public function anUnreadablePresentObjectsSizeIsNotAMissingOne(): void
+    {
+        $store = new FlysystemStore(
+            'flysystem',
+            new UnreachableFilesystem(existenceAnswers: true),
+            Fixtures::factory(),
+        );
+
+        Expect::exception(StoreException::class)->withMessageContaining('but could not be read')->withCode(0);
+
+        $store->size(Fixtures::file());
+    }
+
+    public function anUnreachableStoreIsNotAMissingObjectWhenReadingLastModified(): void
+    {
+        $store = new FlysystemStore('flysystem', new UnreachableFilesystem(), Fixtures::factory());
+
+        Expect::exception(StoreException::class)->withMessageContaining('could not be reached')->withCode(0);
+
+        $store->lastModified(Fixtures::file());
+    }
+
+    public function anUnreadablePresentObjectsLastModifiedIsNotAMissingOne(): void
+    {
+        $store = new FlysystemStore(
+            'flysystem',
+            new UnreachableFilesystem(existenceAnswers: true),
+            Fixtures::factory(),
+        );
+
+        Expect::exception(StoreException::class)->withMessageContaining('but could not be read')->withCode(0);
+
+        $store->lastModified(Fixtures::file());
+    }
+
+    /**
      * sortByPath() is toArray() + usort(), so it materialises and orders the
      * whole bucket before the first yield — and gc calls objects() once per
-     * page. Declaring the adapter already ordered skips it; the listing must
-     * come out the same either way.
+     * page. Declaring the adapter already ordered skips that sort, so the
+     * declared store's listing must match the adapter's raw order exactly,
+     * insertion order and all; the plain store still sorts it.
      */
     public function anOrderedAdapterIsNotSortedAgain(): void
     {
@@ -484,12 +543,19 @@ final class FlysystemStoreTest
             semantics: AdapterSemantics::guaranteed(orderedListing: true),
         );
 
-        $paths = array_map(
+        $toPaths = static fn(iterable $objects): array => array_map(
             static fn(StoredObjectId $id): string => $id->relativePath,
-            iterator_to_array($declared->objects(), false),
+            iterator_to_array($objects, false),
         );
-        sort($paths);
+        $rawOrder = array_values(array_map(
+            static fn(StorageAttributes $a): string => $a->path(),
+            array_filter(
+                iterator_to_array($this->filesystem->listContents('', true), false),
+                static fn(StorageAttributes $a): bool => $a->isFile(),
+            ),
+        ));
 
-        Assert::same($paths, ['a/original.bin', 'b/original.bin', 'c/original.bin']);
+        Assert::same($toPaths($declared->objects()), $rawOrder);
+        Assert::same($toPaths($this->store->objects()), ['a/original.bin', 'b/original.bin', 'c/original.bin']);
     }
 }
