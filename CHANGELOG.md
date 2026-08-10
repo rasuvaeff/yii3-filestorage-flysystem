@@ -5,16 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.1.0 — 2026-08-10
 
-Initial development. Not released.
-
-- `make test-integration` now actually reaches MinIO. It ran the container's own
-  `127.0.0.1` with no `--network host` and supplied none of the four
-  `FILESTORAGE_S3_*` variables, so the documented recipe produced five *risky*
-  tests — which a reader skims as a pass. The target now runs on host networking
-  with the monorepo-root mount and defaults the variables to the documented
-  container, each overridable from the environment.
+First release. Tracks `rasuvaeff/yii3-filestorage` `0.x`: the API settles
+together with core's while the family is built out.
 
 - `FlysystemStore`: the store contract over any Flysystem adapter, with
   maintenance inventory and public/presigned URLs reported as nullable results
