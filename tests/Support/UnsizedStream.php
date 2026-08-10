@@ -39,7 +39,7 @@ final readonly class UnsizedStream implements StreamInterface
     }
 
     #[Override]
-    public function detach()
+    public function detach(): mixed
     {
         return $this->stream->detach();
     }
@@ -105,7 +105,7 @@ final readonly class UnsizedStream implements StreamInterface
     }
 
     #[Override]
-    public function getMetadata(?string $key = null)
+    public function getMetadata(?string $key = null): mixed
     {
         return $this->stream->getMetadata($key);
     }

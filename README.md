@@ -184,6 +184,24 @@ make mutation
 make release-check
 ```
 
+MinIO for the integration suite:
+
+```bash
+docker run -d --name minio -p 9000:9000 \
+  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+  quay.io/minio/minio server /data
+until curl -fs http://127.0.0.1:9000/minio/health/live >/dev/null; do sleep 1; done
+make test-integration
+```
+
+`make test-integration` supplies `FILESTORAGE_S3_ENDPOINT`, `_KEY`, `_SECRET`
+and `_BUCKET` itself, defaulting to that container, so it never skips: with no
+MinIO reachable the S3 client fails to connect and Testo reports the affected
+tests **aborted**. A bare `composer test:integration` with no
+`FILESTORAGE_S3_ENDPOINT` set reports them **skipped** instead. Neither is a
+passing run — check the word, not the colour: `5 passed` means MinIO was really
+reached, `5 skipped` means nothing was tested.
+
 ## License
 
 BSD-3-Clause. See [LICENSE.md](LICENSE.md).
