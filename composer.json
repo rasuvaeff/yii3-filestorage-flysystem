@@ -1,0 +1,115 @@
+{
+    "name": "rasuvaeff/yii3-filestorage-flysystem",
+    "description": "Flysystem object store for rasuvaeff/yii3-filestorage: S3, GCS, Azure and anything else with an adapter",
+    "license": "BSD-3-Clause",
+    "type": "library",
+    "keywords": [
+        "file-storage",
+        "flysystem",
+        "s3",
+        "yii3"
+    ],
+    "authors": [
+        {
+            "name": "Victor Razuvaev",
+            "email": "rasuvaeff@gmail.com"
+        }
+    ],
+    "homepage": "https://github.com/rasuvaeff/yii3-filestorage-flysystem",
+    "support": {
+        "issues": "https://github.com/rasuvaeff/yii3-filestorage-flysystem/issues",
+        "source": "https://github.com/rasuvaeff/yii3-filestorage-flysystem"
+    },
+    "require": {
+        "php": "8.3 - 8.5",
+        "league/flysystem": "^3.29",
+        "psr/http-factory": "^1.0",
+        "psr/http-message": "^2.0",
+        "rasuvaeff/yii3-filestorage": "^0.1"
+    },
+    "require-dev": {
+        "ergebnis/composer-normalize": "^2.51",
+        "friendsofphp/php-cs-fixer": "^3.95",
+        "infection/infection": "^0.33",
+        "league/flysystem-aws-s3-v3": "^3.29",
+        "league/flysystem-memory": "^3.29",
+        "maglnet/composer-require-checker": "^4.17",
+        "nyholm/psr7": "^1.8",
+        "rasuvaeff/rector-named-literals": "^1.0",
+        "rector/rector": "^2.4",
+        "roave/backward-compatibility-check": "^8.0",
+        "testo/bridge-infection": "^0.1.6",
+        "testo/testo": "^0.10.25",
+        "vimeo/psalm": "^6.16",
+        "yiisoft/di": "^1.4",
+        "yiisoft/test-support": "^3.1"
+    },
+    "suggest": {
+        "league/flysystem-aws-s3-v3": "Store objects in S3 or any S3-compatible service, with presigned URLs"
+    },
+    "autoload": {
+        "psr-4": {
+            "Rasuvaeff\\Yii3FilestorageFlysystem\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Rasuvaeff\\Yii3FilestorageFlysystem\\Benchmarks\\": "benchmarks/",
+            "Rasuvaeff\\Yii3FilestorageFlysystem\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "ergebnis/composer-normalize": true,
+            "infection/extension-installer": true
+        },
+        "platform": {
+            "ext-bcmath": "1.0.0",
+            "ext-intl": "1.0.0"
+        },
+        "sort-packages": true
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-master": "0.1.x-dev"
+        },
+        "config-plugin": {
+            "di": "di.php",
+            "params": "params.php"
+        },
+        "config-plugin-options": {
+            "source-directory": "config"
+        },
+        "skills": {
+            "source": "resources/skills"
+        }
+    },
+    "scripts": {
+        "bc-check": "roave-backward-compatibility-check",
+        "bench": "testo --suite=Benchmarks -vv",
+        "build": [
+            "@composer validate --strict",
+            "@composer normalize --dry-run",
+            "@require-checker",
+            "@cs",
+            "@psalm",
+            "@test"
+        ],
+        "cs": "php-cs-fixer fix --dry-run --diff --config=.php-cs-fixer.php",
+        "cs:fix": "php-cs-fixer fix --diff --config=.php-cs-fixer.php",
+        "mutation": "infection --threads=max",
+        "psalm": "psalm --no-cache",
+        "rector": "rector process --dry-run",
+        "rector:fix": "rector process",
+        "release-check": [
+            "@build",
+            "@rector",
+            "sh -c 'LATEST=$(git describe --tags --abbrev=0 2>/dev/null || true); if [ -n \"$LATEST\" ]; then composer bc-check -- --from=\"$LATEST\"; else echo \"No previous tag - skipping BC check\"; fi'"
+        ],
+        "require-checker": "composer-require-checker check composer.json",
+        "test": "testo --suite=Unit",
+        "test:coverage": "testo --suite=Unit --coverage --coverage-clover=build/coverage.xml",
+        "test:coverage:ci": "testo --suite=Unit --coverage-clover=build/coverage.xml",
+        "test:integration": "testo --suite=Integration"
+    }
+}
