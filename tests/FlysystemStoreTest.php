@@ -145,7 +145,7 @@ final class FlysystemStoreTest
             // asserted in its own test
         }
 
-        Assert::same(iterator_to_array($this->store->objects(), false), []);
+        Assert::same(iterator_to_array($this->store->objects(), preserve_keys: false), []);
     }
 
     /**
@@ -170,7 +170,7 @@ final class FlysystemStoreTest
         }
 
         // the object really is gone, not merely reported as refused
-        Assert::same(iterator_to_array($this->store->objects(), false), []);
+        Assert::same(iterator_to_array($this->store->objects(), preserve_keys: false), []);
     }
 
     /**
@@ -271,11 +271,11 @@ final class FlysystemStoreTest
 
         $first = array_map(
             static fn(StoredObjectId $o): string => $o->relativePath,
-            iterator_to_array($this->store->objects(limit: 2), false),
+            iterator_to_array($this->store->objects(limit: 2), preserve_keys: false),
         );
         $rest = array_map(
             static fn(StoredObjectId $o): string => $o->relativePath,
-            iterator_to_array($this->store->objects(afterPath: 'g/b/original.txt'), false),
+            iterator_to_array($this->store->objects(afterPath: 'g/b/original.txt'), preserve_keys: false),
         );
 
         Assert::same($first, ['g/a/original.txt', 'g/b/original.txt']);
@@ -545,12 +545,12 @@ final class FlysystemStoreTest
 
         $toPaths = static fn(iterable $objects): array => array_map(
             static fn(StoredObjectId $id): string => $id->relativePath,
-            iterator_to_array($objects, false),
+            iterator_to_array($objects, preserve_keys: false),
         );
         $rawOrder = array_values(array_map(
             static fn(StorageAttributes $a): string => $a->path(),
             array_filter(
-                iterator_to_array($this->filesystem->listContents('', true), false),
+                iterator_to_array($this->filesystem->listContents('', deep: true), preserve_keys: false),
                 static fn(StorageAttributes $a): bool => $a->isFile(),
             ),
         ));

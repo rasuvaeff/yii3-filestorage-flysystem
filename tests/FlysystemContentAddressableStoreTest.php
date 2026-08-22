@@ -169,7 +169,7 @@ final class FlysystemContentAddressableStoreTest
         Assert::null(
             $this->store->temporaryUrl($file, new DateTimeImmutable('+1 hour'), Fixtures::deliveryOptions()),
         );
-        Assert::same(\count(iterator_to_array($this->store->objects(), false)), 1);
+        Assert::same(\count(iterator_to_array($this->store->objects(), preserve_keys: false)), 1);
 
         $this->store->deleteObject(new StoredObjectId($result->relativePath));
         Assert::false($this->store->exists($file));
