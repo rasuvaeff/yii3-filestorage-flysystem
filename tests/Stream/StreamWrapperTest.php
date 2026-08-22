@@ -109,7 +109,7 @@ final class StreamWrapperTest
         StreamWrapper::register();
         $context = stream_context_create([StreamWrapper::PROTOCOL => ['stream' => $stream]]);
 
-        Assert::false(@fopen(StreamWrapper::PROTOCOL . '://stream', 'wb', false, $context));
+        Assert::false(@fopen(StreamWrapper::PROTOCOL . '://stream', 'wb', use_include_path: false, context: $context));
     }
 
     /**
@@ -160,7 +160,7 @@ final class StreamWrapperTest
         StreamWrapper::register();
         StreamWrapper::register();
 
-        Assert::true(\in_array(StreamWrapper::PROTOCOL, stream_get_wrappers(), true));
+        Assert::true(\in_array(StreamWrapper::PROTOCOL, stream_get_wrappers(), strict: true));
     }
 
     /**

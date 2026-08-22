@@ -41,7 +41,7 @@ final class StreamWrapper
         self::register();
 
         $context = stream_context_create([self::PROTOCOL => ['stream' => $stream]]);
-        $resource = @fopen(self::PROTOCOL . '://stream', 'rb', false, $context);
+        $resource = @fopen(self::PROTOCOL . '://stream', 'rb', use_include_path: false, context: $context);
 
         if ($resource === false) {
             throw new RuntimeException('Could not open the upload stream as a resource');
@@ -52,7 +52,7 @@ final class StreamWrapper
 
     public static function register(): void
     {
-        if (!\in_array(self::PROTOCOL, stream_get_wrappers(), true)) {
+        if (!\in_array(self::PROTOCOL, stream_get_wrappers(), strict: true)) {
             stream_wrapper_register(self::PROTOCOL, self::class);
         }
     }

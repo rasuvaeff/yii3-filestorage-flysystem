@@ -135,7 +135,7 @@ final class MinioIntegrationTest
         Assert::true($url !== null);
 
         $context = stream_context_create(['http' => ['ignore_errors' => true]]);
-        $body = file_get_contents($url, false, $context);
+        $body = file_get_contents($url, use_include_path: false, context: $context);
         $headers = implode("\n", $http_response_header ?? []);
 
         Assert::same($body, 'hello');
@@ -182,10 +182,10 @@ final class MinioIntegrationTest
 
         $paths = array_map(
             static fn(StoredObjectId $o): string => $o->relativePath,
-            iterator_to_array($store->objects(), false),
+            iterator_to_array($store->objects(), preserve_keys: false),
         );
 
-        Assert::true(\in_array($result->relativePath, $paths, true));
+        Assert::true(\in_array($result->relativePath, $paths, strict: true));
 
         $store->delete(Fixtures::file(relativePath: $result->relativePath, storeName: 'minio'));
     }
