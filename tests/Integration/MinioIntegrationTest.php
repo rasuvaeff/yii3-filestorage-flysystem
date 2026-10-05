@@ -30,13 +30,14 @@ use Testo\Test;
  * other way: their whole content is a signature a server has to accept.
  *
  * Skipped when no endpoint is configured, so `composer test:integration` is
- * safe to run anywhere. CI supplies MinIO and fails the job if it never becomes
- * reachable, because a suite that skips itself looks exactly like a suite that
- * passed.
+ * safe to run anywhere. CI supplies an S3 gateway (SeaweedFS — MinIO deleted
+ * its images and gated quay.io in September 2026) and fails the job if it
+ * never becomes reachable, because a suite that skips itself looks exactly
+ * like a suite that passed.
  *
  * ```bash
- * docker run -d --name minio -p 9000:9000 quay.io/minio/minio server /data
- * FILESTORAGE_S3_ENDPOINT=http://127.0.0.1:9000 \
+ * docker run -d --name weed -p 8333:8333 chrislusf/seaweedfs server -dir=/data -s3
+ * FILESTORAGE_S3_ENDPOINT=http://127.0.0.1:8333 \
  * FILESTORAGE_S3_KEY=minioadmin FILESTORAGE_S3_SECRET=minioadmin \
  * FILESTORAGE_S3_BUCKET=filestorage-test make test-integration
  * ```
