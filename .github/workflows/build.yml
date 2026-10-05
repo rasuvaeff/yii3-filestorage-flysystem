@@ -102,15 +102,15 @@ jobs:
   # `composer build` runs the Unit suite only, and the Integration suite skips
   # itself when no object store is reachable — so it has to be invoked
   # explicitly against a real one, or the S3 paths are never executed at all.
-  # Its own job rather than a step in the matrix: one MinIO, not three.
+  # Its own job rather than a step in the matrix: one server, not three.
   integration:
-    name: Integration (MinIO)
+    name: Integration (SeaweedFS)
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true') }}
     runs-on: ubuntu-latest
 
     env:
-      FILESTORAGE_S3_ENDPOINT: http://127.0.0.1:9000
+      FILESTORAGE_S3_ENDPOINT: http://127.0.0.1:8333
       FILESTORAGE_S3_KEY: minioadmin
       FILESTORAGE_S3_SECRET: minioadmin
       FILESTORAGE_S3_BUCKET: filestorage-test
@@ -139,27 +139,33 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --no-progress --prefer-dist
 
+      # SeaweedFS since 2026-09-24: MinIO deleted its Docker Hub images and
+      # gates quay.io behind authentication (the community edition is
+      # archived), while its commercial successor rejects API calls without an
+      # installed license — no anonymously pullable MinIO-family image exists
+      # anymore. SeaweedFS is a real S3 gateway (Apache-2.0): buckets, multipart
+      # upload and presigned GETs incl. response-content-disposition all work.
+      # Started without an s3 config, the gateway runs authless — the suite
+      # proves the signed flow works end to end, not that bad signatures fail.
       # `services:` cannot pass a command, and this image needs one
-      # ("server /data") — a bare services entry runs it argument-less, which
-      # prints help and exits without ever starting the server.
-      - name: Start MinIO
+      # ("server -dir=/data -s3").
+      - name: Start SeaweedFS
         run: |
-          docker run -d --name minio -p 9000:9000 \
-            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e \
-            server /data
+          docker run -d --name weed -p 8333:8333 \
+            chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d \
+            server -dir=/data -s3
 
       # The suite skips when the endpoint is unreachable, which would make a
       # broken service container look like a pass. Fail here instead.
-      - name: Wait for MinIO
+      - name: Wait for SeaweedFS
         run: |
           for i in $(seq 1 30); do
-            if curl -fsS "$FILESTORAGE_S3_ENDPOINT/minio/health/live" >/dev/null 2>&1; then
+            if curl -fsS "$FILESTORAGE_S3_ENDPOINT/" >/dev/null 2>&1; then
               exit 0
             fi
             sleep 2
           done
-          echo "MinIO did not become ready" >&2
+          echo "SeaweedFS did not become ready" >&2
           exit 1
 
       - name: Integration tests

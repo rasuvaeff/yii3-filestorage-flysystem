@@ -6,8 +6,19 @@ namespace Rasuvaeff\Yii3FilestorageFlysystem\Tests;
 
 use DateTimeImmutable;
 use InvalidArgumentException;
+use League\Flysystem\Config;
 use League\Flysystem\Filesystem;
+use League\Flysystem\FilesystemOperator;
 use League\Flysystem\StorageAttributes;
+use League\Flysystem\UnableToCheckExistence;
+use League\Flysystem\UnableToGeneratePublicUrl;
+use League\Flysystem\UnableToGenerateTemporaryUrl;
+use League\Flysystem\UnableToReadFile;
+use League\Flysystem\UrlGeneration\PublicUrlGenerator;
+use League\Flysystem\UrlGeneration\TemporaryUrlGenerator;
+use Rasuvaeff\Understudy\Arg;
+use Rasuvaeff\Understudy\Invocation;
+use Rasuvaeff\Understudy\Understudy;
 use Rasuvaeff\Yii3Filestorage\Exception\StoreException;
 use Rasuvaeff\Yii3Filestorage\Exception\UploadTooLargeException;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
@@ -21,8 +32,6 @@ use Rasuvaeff\Yii3FilestorageFlysystem\AdapterSemantics;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\FixedPathGenerator;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\Fixtures;
-use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\StubUrlGenerator;
-use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\UnreachableFilesystem;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\UnsizedStream;
 use Rasuvaeff\Yii3FilestorageFlysystem\Url\S3TemporaryUrlOptions;
 use Testo\Assert;
@@ -31,6 +40,8 @@ use Testo\Data\DataProvider;
 use Testo\Expect;
 use Testo\Lifecycle\BeforeTest;
 use Testo\Test;
+
+use function Rasuvaeff\Understudy\when;
 
 #[Test]
 #[Covers(FlysystemStore::class)]
@@ -318,7 +329,10 @@ final class FlysystemStoreTest
      */
     public function withoutAnOptionsMapperNoTemporaryUrlIsIssued(): void
     {
-        $store = new FlysystemStore('flysystem', $this->urlCapable(new StubUrlGenerator()), Fixtures::factory());
+        $generator = Understudy::for(PublicUrlGenerator::class, TemporaryUrlGenerator::class);
+        when(fn() => $generator->publicUrl(Arg::any(), Arg::any()))
+            ->answers(static fn(Invocation $call): string => 'https://cdn.example.com/' . $call->args[0]);
+        $store = new FlysystemStore('flysystem', $this->urlCapable($generator), Fixtures::factory());
 
         Assert::same($store->publicUrl(Fixtures::file()), 'https://cdn.example.com/common/ab/cd/key/original.txt');
         Assert::null(
@@ -328,7 +342,10 @@ final class FlysystemStoreTest
 
     public function withAnOptionsMapperTheDeliveryPolicyReachesTheUrl(): void
     {
-        $generator = new StubUrlGenerator();
+        $generator = Understudy::for(PublicUrlGenerator::class, TemporaryUrlGenerator::class);
+        $config = Arg::captor(Config::class);
+        when(fn() => $generator->temporaryUrl(Arg::any(), Arg::any(), $config->capture()))
+            ->answers(static fn(Invocation $call): string => 'https://cdn.example.com/' . $call->args[0] . '?signed');
         $store = new FlysystemStore(
             'flysystem',
             $this->urlCapable($generator),
@@ -340,7 +357,7 @@ final class FlysystemStoreTest
 
         Assert::same($url, 'https://cdn.example.com/common/ab/cd/key/original.txt?signed');
         Assert::same(
-            $generator->lastConfig['get_object_options']['ResponseContentDisposition'] ?? null,
+            $config->last()->get('get_object_options')['ResponseContentDisposition'],
             'attachment; filename="a.txt"; filename*=UTF-8\'\'a.txt',
         );
     }
@@ -351,9 +368,16 @@ final class FlysystemStoreTest
      */
     public function generatorFailuresBecomeNullRatherThanExceptions(): void
     {
+        $generator = Understudy::for(PublicUrlGenerator::class, TemporaryUrlGenerator::class);
+        when(fn() => $generator->publicUrl(Arg::any(), Arg::any()))
+            ->answers(static fn(Invocation $call): never => throw UnableToGeneratePublicUrl::noGeneratorConfigured($call->args[0]));
+        when(fn() => $generator->temporaryUrl(Arg::any(), Arg::any(), Arg::any()))
+            ->answers(
+                static fn(Invocation $call): never => throw UnableToGenerateTemporaryUrl::dueToError($call->args[0], new \RuntimeException('no')),
+            );
         $store = new FlysystemStore(
             'flysystem',
-            $this->urlCapable(new StubUrlGenerator(throwing: true)),
+            $this->urlCapable($generator),
             Fixtures::factory(),
             new S3TemporaryUrlOptions(),
         );
@@ -371,9 +395,14 @@ final class FlysystemStoreTest
      */
     public function anAdapterFailureDuringGenerationAlsoBecomesNull(): void
     {
+        $generator = Understudy::for(PublicUrlGenerator::class, TemporaryUrlGenerator::class);
+        when(fn() => $generator->publicUrl(Arg::any(), Arg::any()))
+            ->answers(static fn(Invocation $call): never => throw UnableToReadFile::fromLocation($call->args[0], 'the signing service is down'));
+        when(fn() => $generator->temporaryUrl(Arg::any(), Arg::any(), Arg::any()))
+            ->answers(static fn(Invocation $call): never => throw UnableToReadFile::fromLocation($call->args[0], 'the signing service is down'));
         $store = new FlysystemStore(
             'flysystem',
-            $this->urlCapable(new StubUrlGenerator(failing: true)),
+            $this->urlCapable($generator),
             Fixtures::factory(),
             new S3TemporaryUrlOptions(),
         );
@@ -390,9 +419,12 @@ final class FlysystemStoreTest
      */
     public function anEmptyUrlIsNotAUrl(): void
     {
+        $generator = Understudy::for(PublicUrlGenerator::class, TemporaryUrlGenerator::class);
+        when(fn() => $generator->publicUrl(Arg::any(), Arg::any()))->returns('');
+        when(fn() => $generator->temporaryUrl(Arg::any(), Arg::any(), Arg::any()))->returns('');
         $store = new FlysystemStore(
             'flysystem',
-            $this->urlCapable(new StubUrlGenerator(empty: true)),
+            $this->urlCapable($generator),
             Fixtures::factory(),
             new S3TemporaryUrlOptions(),
         );
@@ -417,13 +449,45 @@ final class FlysystemStoreTest
         Assert::false($this->store instanceof ContentAddressableStoreInterface);
     }
 
-    private function urlCapable(StubUrlGenerator $generator): Filesystem
+    private function urlCapable(PublicUrlGenerator&TemporaryUrlGenerator $generator): Filesystem
     {
         return new Filesystem(
             adapter: new \League\Flysystem\InMemory\InMemoryFilesystemAdapter(),
             publicUrlGenerator: $generator,
             temporaryUrlGenerator: $generator,
         );
+    }
+
+    /**
+     * A store that cannot answer at all — a reset connection, an expired
+     * credential, a throttling response.
+     *
+     * Flysystem reports "no such key" and "the request failed" with the same
+     * exception type, so the only double that tells the two apart is one where
+     * the follow-up existence probe fails too. The double is strict: any
+     * operator call the tests did not script fails the test instead of
+     * pretending to work.
+     *
+     * @param bool $existenceAnswers When true the probe succeeds and reports the
+     *        object as present — a store that can be reached but cannot serve
+     *        the bytes, which is a different fault from being unreachable.
+     */
+    private function unreachableFilesystem(bool $existenceAnswers = false): FilesystemOperator
+    {
+        $filesystem = Understudy::strict(Understudy::for(FilesystemOperator::class));
+
+        when(fn() => $filesystem->readStream(Arg::any()))
+            ->answers(static fn(Invocation $call): never => throw UnableToReadFile::fromLocation($call->args[0], 'connection reset'));
+        when(fn() => $filesystem->fileSize(Arg::any()))
+            ->answers(static fn(Invocation $call): never => throw UnableToReadFile::fromLocation($call->args[0], 'connection reset'));
+        when(fn() => $filesystem->lastModified(Arg::any()))
+            ->answers(static fn(Invocation $call): never => throw UnableToReadFile::fromLocation($call->args[0], 'connection reset'));
+        when(fn() => $filesystem->fileExists(Arg::any()))
+            ->answers($existenceAnswers
+                ? static fn(): bool => true
+                : static fn(Invocation $call): never => throw UnableToCheckExistence::forLocation($call->args[0]));
+
+        return $filesystem;
     }
 
     /**
@@ -436,7 +500,7 @@ final class FlysystemStoreTest
      */
     public function anUnreachableStoreIsNotAMissingObject(): void
     {
-        $store = new FlysystemStore('flysystem', new UnreachableFilesystem(), Fixtures::factory());
+        $store = new FlysystemStore('flysystem', $this->unreachableFilesystem(), Fixtures::factory());
 
         Expect::exception(StoreException::class)->withMessageContaining('could not be reached')->withCode(0);
 
@@ -452,7 +516,7 @@ final class FlysystemStoreTest
     {
         $store = new FlysystemStore(
             'flysystem',
-            new UnreachableFilesystem(existenceAnswers: true),
+            $this->unreachableFilesystem(existenceAnswers: true),
             Fixtures::factory(),
         );
 
@@ -472,7 +536,7 @@ final class FlysystemStoreTest
      */
     public function anUnreachableStoreCannotAnswerWhetherAFileExists(): void
     {
-        $store = new FlysystemStore('flysystem', new UnreachableFilesystem(), Fixtures::factory());
+        $store = new FlysystemStore('flysystem', $this->unreachableFilesystem(), Fixtures::factory());
 
         Expect::exception(StoreException::class)->withMessageContaining('Could not determine whether')->withCode(0);
 
@@ -481,7 +545,7 @@ final class FlysystemStoreTest
 
     public function anUnreachableStoreIsNotAMissingObjectWhenReadingSize(): void
     {
-        $store = new FlysystemStore('flysystem', new UnreachableFilesystem(), Fixtures::factory());
+        $store = new FlysystemStore('flysystem', $this->unreachableFilesystem(), Fixtures::factory());
 
         Expect::exception(StoreException::class)->withMessageContaining('could not be reached')->withCode(0);
 
@@ -492,7 +556,7 @@ final class FlysystemStoreTest
     {
         $store = new FlysystemStore(
             'flysystem',
-            new UnreachableFilesystem(existenceAnswers: true),
+            $this->unreachableFilesystem(existenceAnswers: true),
             Fixtures::factory(),
         );
 
@@ -503,7 +567,7 @@ final class FlysystemStoreTest
 
     public function anUnreachableStoreIsNotAMissingObjectWhenReadingLastModified(): void
     {
-        $store = new FlysystemStore('flysystem', new UnreachableFilesystem(), Fixtures::factory());
+        $store = new FlysystemStore('flysystem', $this->unreachableFilesystem(), Fixtures::factory());
 
         Expect::exception(StoreException::class)->withMessageContaining('could not be reached')->withCode(0);
 
@@ -514,7 +578,7 @@ final class FlysystemStoreTest
     {
         $store = new FlysystemStore(
             'flysystem',
-            new UnreachableFilesystem(existenceAnswers: true),
+            $this->unreachableFilesystem(existenceAnswers: true),
             Fixtures::factory(),
         );
 

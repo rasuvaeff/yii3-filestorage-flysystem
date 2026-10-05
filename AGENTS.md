@@ -51,15 +51,22 @@ make mutation
 make release-check
 ```
 
-MinIO for the integration suite and the S3 example:
+MinIO for the integration suite and the S3 example is gone: the images were
+deleted from Docker Hub in September 2026 and quay.io pulls now require
+authentication (the community edition is archived, the commercial successor
+needs a license). SeaweedFS — a real S3 gateway, Apache-2.0 — replaces it:
 
 ```bash
-docker run -d --name minio -p 9000:9000 \
-  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-  quay.io/minio/minio server /data
-until curl -fs http://127.0.0.1:9000/minio/health/live >/dev/null; do sleep 1; done
-make test-integration
+docker run -d --name weed -p 8333:8333 \
+  chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d \
+  server -dir=/data -s3
+until curl -fs http://127.0.0.1:8333/ >/dev/null; do sleep 1; done
+FILESTORAGE_S3_ENDPOINT=http://127.0.0.1:8333 make test-integration
 ```
+
+The gateway runs authless without an s3 config, so the default
+`minioadmin`/`minioadmin` credentials the Makefile supplies are accepted
+as-is.
 
 `make test-integration` supplies the four `FILESTORAGE_S3_*` variables itself,
 defaulting to that container, and runs with `--network host` — the suite talks
