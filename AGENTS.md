@@ -87,21 +87,24 @@ nothing was tested. Check the word before believing the colour.
 
 ## Mutation testing
 
-`minMsi` is **88, and no mutator is ignored** — 202 of 227 mutants killed. Every
-fault the store distinguishes has a test that breaks it that specific way:
-missing vs. unreachable vs. present-but-unreadable, a declared size trusted
-over a re-measurement, and the reuse cap's own boundary distinct from the
-pre-write one. The survivors are the groups below, none of which a test can
-kill without inventing a state the code cannot reach:
+`minMsi` is **88**. `composer mutation` runs Infection with `--with-uncovered`
+(code the tests execute but do not name in `#[Covers]` is mutated too), so the
+number is the overall MSI: 236 of 245 counted mutants killed (about 96%), with
+the template's signature-default ignore and Public/ProtectedVisibility off. The
+12 ignored mutants are `type $name = default,` signature lines; the signatures
+that carry them (`objects()`, `putIfAbsent()`, `guaranteed()`) are written one
+parameter per line so the ignore applies. Every fault the store distinguishes
+has a test that breaks it that specific way: missing vs. unreachable vs.
+present-but-unreadable, a declared size trusted over a re-measurement, the
+reuse cap's own boundary distinct from the pre-write one, and a pre-write
+refusal that never touches the filesystem. The survivors are the groups below:
 
 | Group | Example | Why no test kills it |
 |---|---|---|
-| Null-safe operators in the stream wrapper | `$this->stream?->read(...)` | PHP calls `stream_open()` before any other method and refuses the handle if it returns false, so `$stream` is never null when the others run. The null-safety is there because the property must be typed nullable, not because the branch happens |
 | Floors and clamps | `max(0, $written)` around a size Flysystem already reports as non-negative | Guards a value the source cannot produce; removing the floor changes nothing observable |
-| The pre-write byte check | `$maxBytes > 0 && $declared !== null && $declared > $maxBytes`, and its `throw`, in both stores | Deleting it does not let an oversized upload through — the post-write verification catches the same body, with the same message and the same end state. What the pre-check saves is bandwidth, and no assertion can see bandwidth |
 | A redundant `rewind()` | `measure()`'s own `$stream->rewind()` | `Upload::stream()` already rewinds on every call, so nothing downstream can ever observe whether `measure()` also did |
-| Fields no caller reads | `'dev'` in the stat array; `use_include_path` in the `fopen()` call | `stream_stat()`'s own comment says only `size` matters to anything downstream; a custom stream-wrapper protocol never consults the include path either |
-| A nullsafe property read | `$this->semantics?->orderedListing` in `objects()` | Same shape as the stream wrapper's null-safe calls: reading a property through `->` on a null object is a PHP warning, not a fatal error, and evaluates to null either way |
+| The `use_include_path` argument | `fopen(..., use_include_path: false, ...)` in `StreamWrapper::wrap()` | A custom stream-wrapper protocol never consults the include path |
+| A nullsafe property read | `$this->semantics?->orderedListing` in `objects()` | Reading a property through `->` on a null object is a PHP warning, not a fatal error, and evaluates to null either way |
 
 The `return null` inside each URL `catch` (`publicUrl()`, `temporaryUrl()`) is
 the same shape: falling through lands on a `$url === '' ? null : $url` over an

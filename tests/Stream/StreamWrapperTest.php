@@ -173,4 +173,105 @@ final class StreamWrapperTest
 
         Assert::false(@fopen(StreamWrapper::PROTOCOL . '://stream', 'rb'));
     }
+
+    /**
+     * PHP calls `stream_open()` first, so these branches cannot be reached
+     * through a resource; called directly they must still answer safely
+     * instead of failing on a missing stream.
+     */
+    public function aWrapperThatWasNeverOpenedAnswersSafely(): void
+    {
+        $wrapper = new StreamWrapper();
+
+        Assert::same($wrapper->stream_read(10), '');
+        Assert::true($wrapper->stream_eof());
+        Assert::same($wrapper->stream_tell(), 0);
+        Assert::false($wrapper->stream_stat());
+        Assert::false($wrapper->stream_seek(0));
+    }
+
+    public function anOpenedWrapperReportsThePositionOfItsStream(): void
+    {
+        $wrapper = $this->opened('abcdef');
+
+        Assert::same($wrapper->stream_read(4), 'abcd');
+        Assert::same($wrapper->stream_tell(), 4);
+        Assert::false($wrapper->stream_eof());
+        Assert::same($wrapper->stream_read(10), 'ef');
+        Assert::true($wrapper->stream_eof());
+    }
+
+    public function theStatArrayCarriesEveryKeyFstatCallersIndexInto(): void
+    {
+        $stat = $this->opened('hello')->stream_stat();
+
+        Assert::same($stat, [
+            'dev' => 0, 'ino' => 0, 'mode' => 0o100_444, 'nlink' => 0,
+            'uid' => 0, 'gid' => 0, 'rdev' => 0,
+            'size' => 5,
+            'atime' => 0, 'mtime' => 0, 'ctime' => 0,
+            'blksize' => -1, 'blocks' => -1,
+        ]);
+    }
+
+    public function streamOptionsAreNotSupported(): void
+    {
+        Assert::false((new StreamWrapper())->stream_set_option(1, 0, 0));
+    }
+
+    /**
+     * A failed `fopen()` is a failure, not a resource: the store would
+     * otherwise hand `false` to Flysystem.
+     */
+    public function aFailedOpenIsReportedAsAnException(): void
+    {
+        $failing = new class {
+            /** @var resource|null */
+            public $context;
+
+            public function stream_open(string $path, string $mode, int $options, ?string &$openedPath): bool
+            {
+                return false;
+            }
+        };
+
+        stream_wrapper_unregister(StreamWrapper::PROTOCOL);
+        stream_wrapper_register(StreamWrapper::PROTOCOL, $failing::class);
+
+        try {
+            StreamWrapper::wrap((new Psr17Factory())->createStream('hello'));
+            Assert::fail('wrapping should have failed');
+        } catch (\RuntimeException $e) {
+            Assert::same($e->getMessage(), 'Could not open the upload stream as a resource');
+        } finally {
+            stream_wrapper_unregister(StreamWrapper::PROTOCOL);
+            StreamWrapper::register();
+        }
+    }
+
+    public function registerInstallsTheWrapperWhenItIsMissing(): void
+    {
+        if (\in_array(StreamWrapper::PROTOCOL, stream_get_wrappers(), strict: true)) {
+            stream_wrapper_unregister(StreamWrapper::PROTOCOL);
+        }
+
+        StreamWrapper::register();
+
+        Assert::true(\in_array(StreamWrapper::PROTOCOL, stream_get_wrappers(), strict: true));
+        $resource = StreamWrapper::wrap((new Psr17Factory())->createStream('hello'));
+        Assert::same(stream_get_contents($resource), 'hello');
+        fclose($resource);
+    }
+
+    private function opened(string $contents): StreamWrapper
+    {
+        $wrapper = new StreamWrapper();
+        $wrapper->context = stream_context_create([
+            StreamWrapper::PROTOCOL => ['stream' => (new Psr17Factory())->createStream($contents)],
+        ]);
+        $opened = null;
+        Assert::true($wrapper->stream_open('x://y', 'rb', 0, $opened));
+
+        return $wrapper;
+    }
 }

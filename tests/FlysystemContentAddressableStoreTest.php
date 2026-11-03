@@ -6,6 +6,10 @@ namespace Rasuvaeff\Yii3FilestorageFlysystem\Tests;
 
 use DateTimeImmutable;
 use League\Flysystem\Filesystem;
+use League\Flysystem\FilesystemOperator;
+use League\Flysystem\UnableToWriteFile;
+use Rasuvaeff\Understudy\Arg;
+use Rasuvaeff\Understudy\Understudy;
 use Rasuvaeff\Yii3Filestorage\Exception\StoreException;
 use Rasuvaeff\Yii3Filestorage\Exception\UploadTooLargeException;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
@@ -17,12 +21,15 @@ use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemContentAddressableStore;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\FixedSizeStream;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\Fixtures;
+use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\StallingStream;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\UnsizedStream;
 use Testo\Assert;
 use Testo\Codecov\Covers;
 use Testo\Expect;
 use Testo\Lifecycle\BeforeTest;
 use Testo\Test;
+
+use function Rasuvaeff\Understudy\when;
 
 #[Test]
 #[Covers(FlysystemContentAddressableStore::class)]
@@ -286,5 +293,68 @@ final class FlysystemContentAddressableStoreTest
             'a.txt',
             Fixtures::factory(),
         );
+    }
+
+    /**
+     * An empty read before the end is a stalled source, not more data to wait
+     * for: measuring stops there. Skipping it instead would count bytes the
+     * first read never delivered.
+     */
+    public function aStalledReadEndsTheMeasurement(): void
+    {
+        $this->filesystem->write(self::KEY, 'abc');
+        $upload = Upload::fromStream(
+            new StallingStream(Fixtures::factory()->createStream('abc')),
+            'a.txt',
+            Fixtures::factory(),
+        );
+
+        Expect::exception(StoreException::class)->withMessageContaining('holds 3 bytes but the upload is 0');
+
+        $this->store->putIfAbsent($upload, new StoredObjectId(self::KEY));
+    }
+
+    public function anEmptyBodyIsPublishedWithSizeZero(): void
+    {
+        $result = $this->store->putIfAbsent(Fixtures::upload(''), new StoredObjectId(self::KEY));
+
+        Assert::true($result->created);
+        Assert::same($result->size, 0);
+    }
+
+    public function anEmptyBodyIsReusedWithSizeZero(): void
+    {
+        $this->filesystem->write(self::KEY, '');
+
+        $result = $this->store->putIfAbsent(Fixtures::upload(''), new StoredObjectId(self::KEY));
+
+        Assert::false($result->created);
+        Assert::same($result->size, 0);
+    }
+
+    public function aFailedWriteBecomesAStoreExceptionCarryingTheCause(): void
+    {
+        $cause = UnableToWriteFile::atLocation(self::KEY, 'disk full');
+        $filesystem = Understudy::strict(Understudy::for(FilesystemOperator::class));
+        when(fn() => $filesystem->fileExists(Arg::any()))->returns(false);
+        when(fn() => $filesystem->writeStream(Arg::any(), Arg::any()))
+            ->answers(static fn(): never => throw $cause);
+        $store = new FlysystemContentAddressableStore(
+            store: new FlysystemStore('flysystem', $filesystem, Fixtures::factory()),
+            filesystem: $filesystem,
+            semantics: AdapterSemantics::guaranteed(),
+        );
+
+        try {
+            $store->putIfAbsent(Fixtures::upload(), new StoredObjectId(self::KEY));
+        } catch (StoreException $e) {
+            Assert::same($e->getMessage(), 'Could not write "' . self::KEY . '" to store "flysystem"');
+            Assert::same($e->getCode(), 0);
+            Assert::same($e->getPrevious(), $cause);
+
+            return;
+        }
+
+        Assert::fail('a StoreException should have been thrown');
     }
 }
