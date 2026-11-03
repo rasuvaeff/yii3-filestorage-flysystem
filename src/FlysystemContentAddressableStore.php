@@ -90,8 +90,11 @@ final readonly class FlysystemContentAddressableStore implements
     }
 
     #[Override]
-    public function putIfAbsent(Upload $upload, StoredObjectId $object, int $maxBytes = 0): StoreResult
-    {
+    public function putIfAbsent(
+        Upload $upload,
+        StoredObjectId $object,
+        int $maxBytes = 0,
+    ): StoreResult {
         $path = $object->relativePath;
         $declared = $upload->size();
 
@@ -227,8 +230,10 @@ final readonly class FlysystemContentAddressableStore implements
     }
 
     #[Override]
-    public function objects(?string $afterPath = null, int $limit = 1000): iterable
-    {
+    public function objects(
+        ?string $afterPath = null,
+        int $limit = 1000,
+    ): iterable {
         return $this->store->objects($afterPath, $limit);
     }
 

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- Mutation testing now counts code the tests execute but do not name in `#[Covers]`
+  (`composer mutation` runs Infection with `--with-uncovered`, plus the signature-default
+  ignore and the visibility mutators switched off as in the package template); overall
+  MSI 78% -> about 96% against `minMsi` 88. New tests: a pre-write refusal that never
+  touches the filesystem, `StoreException` wrapping of failed writes, deletes and
+  listings (message, code `0`, previous), operators without URL methods, `StreamWrapper`
+  called without a stream and its `fstat()` shape, a failed `fopen()`, re-registration,
+  a stalled read during measuring, and empty-body sizes. Behaviour-neutral source
+  reformatting: `objects()`, `putIfAbsent()` and `AdapterSemantics::guaranteed()` take one
+  parameter per line, and the `AdapterSemantics` refusal message is a single literal
+  instead of a concatenation (identical text).
 - Wire `AddNameToLiteralArgumentRector` into `rector.php`. The rule shipped in
   `require-dev` from the first release but was never listed in the config, so it
   had never run. Enabling it names the boolean literals passed to `fopen()` and

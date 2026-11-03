@@ -56,9 +56,7 @@ final readonly class AdapterSemantics
     ) {
         if (!$atomicVisibility || !$immutableContentKeys) {
             throw new InvalidArgumentException(
-                'Deduplication requires an adapter with both atomic visibility and immutable content keys. '
-                . 'Declare AdapterSemantics::guaranteed() only for a store that has them — otherwise keep the '
-                . 'plain FlysystemStore binding, which stays unique-only and is always safe',
+                'Deduplication requires an adapter with both atomic visibility and immutable content keys. Declare AdapterSemantics::guaranteed() only for a store that has them — otherwise keep the plain FlysystemStore binding, which stays unique-only and is always safe',
             );
         }
     }
@@ -66,8 +64,9 @@ final readonly class AdapterSemantics
     /**
      * Reads as an assertion at the call site, which is what it is.
      */
-    public static function guaranteed(bool $orderedListing = false): self
-    {
+    public static function guaranteed(
+        bool $orderedListing = false,
+    ): self {
         return new self(
             atomicVisibility: true,
             immutableContentKeys: true,

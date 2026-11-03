@@ -305,8 +305,10 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
     }
 
     #[Override]
-    public function objects(?string $afterPath = null, int $limit = 1000): iterable
-    {
+    public function objects(
+        ?string $afterPath = null,
+        int $limit = 1000,
+    ): iterable {
         try {
             $yielded = 0;
 

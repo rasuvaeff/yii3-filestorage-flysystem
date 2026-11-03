@@ -7,13 +7,18 @@ namespace Rasuvaeff\Yii3FilestorageFlysystem\Tests;
 use DateTimeImmutable;
 use InvalidArgumentException;
 use League\Flysystem\Config;
+use League\Flysystem\DirectoryListing;
 use League\Flysystem\Filesystem;
 use League\Flysystem\FilesystemOperator;
 use League\Flysystem\StorageAttributes;
 use League\Flysystem\UnableToCheckExistence;
+use League\Flysystem\UnableToDeleteDirectory;
+use League\Flysystem\UnableToDeleteFile;
 use League\Flysystem\UnableToGeneratePublicUrl;
 use League\Flysystem\UnableToGenerateTemporaryUrl;
+use League\Flysystem\UnableToListContents;
 use League\Flysystem\UnableToReadFile;
+use League\Flysystem\UnableToWriteFile;
 use League\Flysystem\UrlGeneration\PublicUrlGenerator;
 use League\Flysystem\UrlGeneration\TemporaryUrlGenerator;
 use Rasuvaeff\Understudy\Arg;
@@ -621,5 +626,129 @@ final class FlysystemStoreTest
 
         Assert::same($toPaths($declared->objects()), $rawOrder);
         Assert::same($toPaths($this->store->objects()), ['a/original.bin', 'b/original.bin', 'c/original.bin']);
+    }
+
+    /**
+     * "Refused before any I/O" is a claim about the filesystem, not about the
+     * result: the post-write check would refuse the same body with the same
+     * message, so only a filesystem that is never touched can tell the two
+     * checks apart.
+     */
+    public function aKnownOversizedUploadNeverTouchesTheFilesystem(): void
+    {
+        $store = new FlysystemStore(
+            'flysystem',
+            Understudy::strict(Understudy::for(FilesystemOperator::class)),
+            Fixtures::factory(),
+        );
+
+        Expect::exception(UploadTooLargeException::class)->withMessageContaining('exceeds the 3 byte limit');
+
+        $store->write(Fixtures::upload('hello'), 'common', new RandomPathGenerator(), maxBytes: 3);
+    }
+
+    public function theSizeOfAnEmptyObjectIsZero(): void
+    {
+        $this->filesystem->write('g/a/original.txt', '');
+
+        Assert::same($this->store->size(Fixtures::file(relativePath: 'g/a/original.txt')), 0);
+    }
+
+    public function anOperatorWithoutUrlMethodsAnswersWithNull(): void
+    {
+        $store = new FlysystemStore(
+            'flysystem',
+            Understudy::strict(Understudy::for(FilesystemOperator::class)),
+            Fixtures::factory(),
+            new S3TemporaryUrlOptions(),
+        );
+
+        Assert::null($store->publicUrl(Fixtures::file()));
+        Assert::null(
+            $store->temporaryUrl(Fixtures::file(), new DateTimeImmutable('+1 hour'), Fixtures::deliveryOptions()),
+        );
+    }
+
+    public function aFailedWriteBecomesAStoreExceptionCarryingTheCause(): void
+    {
+        $cause = UnableToWriteFile::atLocation('a/b', 'disk full');
+        $filesystem = Understudy::strict(Understudy::for(FilesystemOperator::class));
+        when(fn() => $filesystem->fileExists(Arg::any()))->returns(false);
+        when(fn() => $filesystem->writeStream(Arg::any(), Arg::any()))
+            ->answers(static fn(): never => throw $cause);
+        $store = new FlysystemStore('flysystem', $filesystem, Fixtures::factory());
+
+        $this->assertStoreFailure(
+            static fn() => $store->write(Fixtures::upload(), 'common', new FixedPathGenerator('a/b')),
+            'Could not write "a/b" to store "flysystem"',
+            $cause,
+        );
+    }
+
+    public function aFailedDeleteBecomesAStoreExceptionCarryingTheCause(): void
+    {
+        $cause = UnableToDeleteDirectory::atLocation('common/ab/cd/key', 'denied');
+        $filesystem = Understudy::strict(Understudy::for(FilesystemOperator::class));
+        when(fn() => $filesystem->deleteDirectory(Arg::any()))->answers(static fn(): never => throw $cause);
+        $store = new FlysystemStore('flysystem', $filesystem, Fixtures::factory());
+
+        $this->assertStoreFailure(
+            static fn() => $store->delete(Fixtures::file()),
+            'Could not delete "common/ab/cd/key" from store "flysystem"',
+            $cause,
+        );
+    }
+
+    public function aFailedObjectDeleteBecomesAStoreExceptionCarryingTheCause(): void
+    {
+        $cause = UnableToDeleteFile::atLocation('g/a/original.txt', 'denied');
+        $filesystem = Understudy::strict(Understudy::for(FilesystemOperator::class));
+        when(fn() => $filesystem->delete(Arg::any()))->answers(static fn(): never => throw $cause);
+        $store = new FlysystemStore('flysystem', $filesystem, Fixtures::factory());
+
+        $this->assertStoreFailure(
+            static fn() => $store->deleteObject(new StoredObjectId('g/a/original.txt')),
+            'Could not delete "g/a/original.txt" from store "flysystem"',
+            $cause,
+        );
+    }
+
+    public function aFailedListingBecomesAStoreExceptionCarryingTheCause(): void
+    {
+        $cause = UnableToListContents::atLocation('', deep: true, previous: new \RuntimeException('timeout'));
+        $filesystem = Understudy::strict(Understudy::for(FilesystemOperator::class));
+        when(fn() => $filesystem->listContents(Arg::any(), Arg::any()))
+            ->answers(static fn(): DirectoryListing => new DirectoryListing(
+                (static function () use ($cause): \Generator {
+                    yield from [];
+
+                    throw $cause;
+                })(),
+            ));
+        $store = new FlysystemStore('flysystem', $filesystem, Fixtures::factory());
+
+        $this->assertStoreFailure(
+            static fn() => iterator_to_array($store->objects(), preserve_keys: false),
+            'Could not list store "flysystem"',
+            $cause,
+        );
+    }
+
+    /**
+     * @param \Closure(): mixed $action
+     */
+    private function assertStoreFailure(\Closure $action, string $message, \Throwable $cause): void
+    {
+        try {
+            $action();
+        } catch (StoreException $e) {
+            Assert::same($e->getMessage(), $message);
+            Assert::same($e->getCode(), 0);
+            Assert::same($e->getPrevious(), $cause);
+
+            return;
+        }
+
+        Assert::fail('a StoreException should have been thrown');
     }
 }
