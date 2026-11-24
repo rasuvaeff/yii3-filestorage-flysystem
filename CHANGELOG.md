@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- Enh #8: Add PHP 8.6 support. The constraint is now `8.3 - 8.6`, and
+  `rasuvaeff/yii3-filestorage` is accepted on the `^0.8` line (released with
+  `8.3 - 8.6`).
+
 - Mutation testing now counts code the tests execute but do not name in `#[Covers]`
   (`composer mutation` runs Infection with `--with-uncovered`, plus the signature-default
   ignore and the visibility mutators switched off as in the package template); overall

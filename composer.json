@@ -21,11 +21,11 @@
         "source": "https://github.com/rasuvaeff/yii3-filestorage-flysystem"
     },
     "require": {
-        "php": "8.3 - 8.5",
+        "php": "8.3 - 8.6",
         "league/flysystem": "^3.29",
         "psr/http-factory": "^1.0",
         "psr/http-message": "^2.0",
-        "rasuvaeff/yii3-filestorage": "^0.1"
+        "rasuvaeff/yii3-filestorage": "^0.1 || ^0.8"
     },
     "require-dev": {
         "ergebnis/composer-normalize": "^2.51",
