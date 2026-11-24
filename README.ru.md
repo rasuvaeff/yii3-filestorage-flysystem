@@ -22,7 +22,7 @@ web-пакет.
 
 ## Требования
 
-- PHP 8.3+
+- PHP 8.3 – 8.6
 - `league/flysystem` ^3.29 (v2 не поддерживается)
 - `rasuvaeff/yii3-filestorage` ^0.1
 - Реализация PSR-17 и любой адаптер Flysystem
