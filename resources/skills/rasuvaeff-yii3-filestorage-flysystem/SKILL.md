@@ -40,7 +40,9 @@ results. Namespace `Rasuvaeff\Yii3FilestorageFlysystem\`. Full API reference:
    key is the hash of the content; a mismatch means a foreign writer.
 
 6. **Do not turn the byte cap into a mid-write counter.** A remote PUT has no
-   abort: check before, verify after, remove on violation.
+   abort: check before, verify after, remove on violation (for a unique
+   `write()`; `putIfAbsent()` leaves an over-cap object to the ledger grace
+   period and `gc`, since another writer may already reference it).
 
 7. **No suppressions.** No `@psalm-suppress`, no baseline. Fix the root cause.
 
