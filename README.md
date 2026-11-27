@@ -146,18 +146,27 @@ return [
 | Flag | True when |
 |---|---|
 | `atomicVisibility` | A reader never sees a partially uploaded body. True for S3 and S3-compatible services; false for a plain FTP/SFTP adapter writing in place |
-| `immutableContentKeys` | Nothing but this package writes under the content-addressed prefix, and never rewrites a key |
+| `immutableContentKeys` | Nothing but this package writes under the content-addressed prefix, and a key is never rewritten with different bytes |
 
 There is no permissive default. An installation that cannot promise both keeps
 the plain `FlysystemStore` binding and stays unique-only — fully functional,
-just not deduplicating. The alternative everyone reaches for,
-`fileExists()` then `write()`, is precisely the race that hands a second writer
-a half-uploaded object and calls it a cache hit.
+just not deduplicating. Without atomic visibility, `fileExists()` then
+`write()` is precisely the race that hands a second writer a half-uploaded
+object and calls it a cache hit.
 
-`putIfAbsent()` reuses existing bytes only after a length check, and reports
-`created: false` so the ledger records a reference instead of a new blob. A
-length that disagrees with the upload is a hard error: the key *is* the hash, so
-a mismatch means something outside this package wrote it.
+`putIfAbsent()` reuses existing bytes only after a length check. A length that
+disagrees with the upload is a hard error: the key *is* the hash, so a mismatch
+means something outside this package wrote it.
+
+The guarantee is **atomic publication of identical content**, not a single
+creator. Two writers that arrive together both see the key absent, both upload
+the same bytes, and both get `created: true`; a reader in between sees one
+whole object or none. `created` is therefore advisory — `false` means the bytes
+were already there, `true` may be reported to more than one concurrent writer —
+and nothing deletes bytes on its basis: the ledger's reservations and
+references decide when the collector may take an object. An exclusive first
+write (S3 `If-None-Match: *`) is not reachable through Flysystem 3's write
+config, and would hold for one adapter only.
 
 ## Byte caps
 

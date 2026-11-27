@@ -128,9 +128,16 @@ unassigned variable, which is also null.
 - **`AdapterSemantics` has no permissive default and must keep none.** A value
   object that accepted "atomic but mutable" would make deduplication opt-*out*,
   and what it hides is silent corruption found months later.
-- **`putIfAbsent()` verifies length before reusing, and never overwrites.** The
-  key is the hash; a length mismatch means a foreign writer, which invalidates
-  the premise rather than being something to paper over.
+- **`putIfAbsent()` verifies length before reusing, and never overwrites with
+  different bytes.** The key is the hash; a length mismatch means a foreign
+  writer, which invalidates the premise rather than being something to paper
+  over.
+- **`created` is advisory, not exclusive.** Two writers that both see the key
+  absent both PUT the same bytes and both report `created: true`
+  (`concurrentWritersBothPublishTheSameBytesAndBothReportCreated`). That is the
+  contract, not a bug: no caller deletes on `created`, the ledger's reservations
+  decide. Do not "fix" it with S3 `If-None-Match` — Flysystem 3's S3 adapter
+  drops the option, and it would hold for one adapter only (golden rule 3).
 - **Byte caps cannot be enforced mid-write here.** Checked before, verified
   after, object removed on violation. Do not "fix" this into a streaming
   counter — a remote PUT has no abort, and the pre-check plus `Upload`'s spool

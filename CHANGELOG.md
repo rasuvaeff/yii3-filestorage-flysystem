@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.2 — 2026-11-27
+
+- Docs: `putIfAbsent()` guarantees atomic publication of identical content, not a single creator. Concurrent writers that both see the key absent both publish and both report `created: true`; the flag is advisory and nothing deletes on it (#16).
+- Tests: a controlled interleaving pins the concurrent-writer outcome in the unit and S3 suites; the S3 suite issues a real `Range` request on a presigned URL.
+
 ## 0.3.1 — 2026-11-27
 
 - Docs: the agent skill notes that `putIfAbsent()` leaves an over-cap object to the ledger grace period and `gc` instead of removing it.

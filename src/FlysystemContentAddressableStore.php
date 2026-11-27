@@ -53,21 +53,6 @@ final readonly class FlysystemContentAddressableStore implements
     ) {}
 
     /**
-     * Publishes immutable bytes at a content-addressed key, or reuses them.
-     *
-     * The reuse check is a size comparison, not a re-read: the key already
-     * *is* the hash of the content, so bytes at that key with a matching length
-     * are the same bytes unless SHA-256 has been broken. A length that
-     * disagrees means the key was written by something that does not share this
-     * convention — which invalidates the whole premise, so it is a hard error
-     * rather than a silent overwrite or a silent reuse.
-     *
-     * There is no `fileExists()`-then-`write()` race to lose here: two writers
-     * arriving together both write the same bytes to the same key, and
-     * {@see AdapterSemantics::$atomicVisibility} is the promise that a reader
-     * in between sees one whole object or none.
-     */
-    /**
      * Counts an upload that does not report its own length.
      *
      * @return int<0, max>
@@ -89,6 +74,26 @@ final readonly class FlysystemContentAddressableStore implements
         return $counted;
     }
 
+    /**
+     * Publishes immutable bytes at a content-addressed key, or reuses them.
+     *
+     * The reuse check is a size comparison, not a re-read: the key already
+     * *is* the hash of the content, so bytes at that key with a matching length
+     * are the same bytes unless SHA-256 has been broken. A length that
+     * disagrees means the key was written by something that does not share this
+     * convention — which invalidates the whole premise, so it is a hard error
+     * rather than a silent overwrite or a silent reuse.
+     *
+     * The `fileExists()`-then-`write()` race exists, and is harmless here: two
+     * writers arriving together both see the key absent, both write the same
+     * bytes to it, and {@see AdapterSemantics::$atomicVisibility} is the
+     * promise that a reader in between sees one whole object or none. Both
+     * then report `created: true`. That flag is advisory — it may be true for
+     * more than one concurrent writer — and nothing may delete bytes on its
+     * basis: the ledger's references and the collector own that decision. An
+     * exclusive first write (S3 `If-None-Match: *`) is not reachable through
+     * Flysystem 3's write config, and would hold for one adapter only.
+     */
     #[Override]
     public function putIfAbsent(
         Upload $upload,
