@@ -24,7 +24,7 @@ against it.
 
 - PHP 8.3 – 8.6
 - `league/flysystem` ^3.35.3 (v2 is not supported)
-- `rasuvaeff/yii3-filestorage` ^0.1
+- `rasuvaeff/yii3-filestorage` ^0.8.2
 - A PSR-17 implementation, and a Flysystem adapter of your choice
 
 ## Installation

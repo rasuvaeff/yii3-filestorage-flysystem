@@ -24,7 +24,7 @@ web-пакет.
 
 - PHP 8.3 – 8.6
 - `league/flysystem` ^3.35.3 (v2 не поддерживается)
-- `rasuvaeff/yii3-filestorage` ^0.1
+- `rasuvaeff/yii3-filestorage` ^0.8.2
 - Реализация PSR-17 и любой адаптер Flysystem
 
 ## Установка
