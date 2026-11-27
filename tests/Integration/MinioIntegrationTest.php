@@ -7,7 +7,10 @@ namespace Rasuvaeff\Yii3FilestorageFlysystem\Tests\Integration;
 use Aws\S3\S3Client;
 use DateTimeImmutable;
 use League\Flysystem\AwsS3V3\AwsS3V3Adapter;
+use Rasuvaeff\Yii3Filestorage\File;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
+use Rasuvaeff\Yii3Filestorage\Policy\DeliveryOptions;
+use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicy;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\FlatSiblingLayout;
 use Rasuvaeff\Yii3Filestorage\Store\QuarantinedObject;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObject;
@@ -16,6 +19,7 @@ use Rasuvaeff\Yii3Filestorage\Store\StoreResult;
 use Rasuvaeff\Yii3FilestorageFlysystem\AdapterSemantics;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemContentAddressableStore;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore;
+use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\FixedPathGenerator;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\Fixtures;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\RacingFilesystem;
 use Rasuvaeff\Yii3FilestorageFlysystem\Url\S3TemporaryUrlOptions;
@@ -85,6 +89,7 @@ final class MinioIntegrationTest
         $this->filesystem = new RacingFilesystem(new AwsS3V3Adapter($client, $bucket));
         $this->store = new FlysystemStore(
             name: 'minio',
+            filesystem: $this->filesystem,
             streamFactory: Fixtures::factory(),
             temporaryUrlOptions: new S3TemporaryUrlOptions(),
             quarantinePrefix: self::QUARANTINE,
@@ -255,8 +260,8 @@ final class MinioIntegrationTest
 
         $found = null;
         foreach ($store->objects() as $object) {
-            Assert::false(str_starts_with($object->relativePath, self::QUARANTINE . '/'));
-            if ($object->relativePath === $result->relativePath) {
+            Assert::false(str_starts_with($object->id->relativePath, self::QUARANTINE . '/'));
+            if ($object->id->relativePath === $result->relativePath) {
                 $found = $object;
             }
         }
@@ -327,7 +332,7 @@ final class MinioIntegrationTest
         Assert::same($filesystem->read(self::KEY), 'republished');
         Assert::false($this->isListed($store, $entry->token));
 
-        $store->deleteObject(new StoredObjectId(self::KEY));
+        $filesystem->delete(self::KEY);
     }
 
     /**
@@ -343,6 +348,7 @@ final class MinioIntegrationTest
         }
         $store = new FlysystemStore(
             name: 'minio',
+            filesystem: $filesystem,
             streamFactory: Fixtures::factory(),
             layout: new FlatSiblingLayout(),
         );
@@ -355,6 +361,124 @@ final class MinioIntegrationTest
         Assert::true($filesystem->fileExists($directory . '/abc/nested.jpg'));
 
         $filesystem->deleteDirectory($directory);
+    }
+
+    /**
+     * An uploaded SVG in a group whose policy says inline: S3 must answer
+     * `attachment`, because a presigned response cannot carry `nosniff` and
+     * an inline SVG from the bucket's origin runs as that origin (review 1.0
+     * A5). Fetched for real.
+     */
+    public function aPresignedUrlServesActiveContentAsAnAttachment(): void
+    {
+        $store = $this->requireStore();
+        $svg = '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>';
+
+        $result = $store->write(Fixtures::upload($svg, 'x.svg'), 'common', new RandomPathGenerator(), 'image/svg+xml');
+        $file = File::create(
+            id: 'svg-1',
+            storeName: 'minio',
+            groupName: 'common',
+            relativePath: $result->relativePath,
+            originalName: 'x.svg',
+            size: \strlen($svg),
+            createdAt: new DateTimeImmutable(),
+            mimeType: 'image/svg+xml',
+        );
+        $options = DeliveryOptions::fromFile($file, new DeliveryPolicy(allowDirectPublicUrl: false, forceDownload: false));
+
+        $url = $store->temporaryUrl($file, new DateTimeImmutable('+10 minutes'), $options);
+        Assert::true($url !== null);
+
+        $body = file_get_contents($url, use_include_path: false, context: stream_context_create(['http' => ['ignore_errors' => true]]));
+        $headers = strtolower(implode("\n", $http_response_header ?? []));
+
+        Assert::same($body, $svg);
+        Assert::string($headers)->contains('content-disposition: attachment');
+
+        $store->delete($file);
+    }
+
+    /**
+     * The detected type is the object's own Content-Type — what a public URL
+     * serves — not Flysystem's second guess from the extension or the bytes
+     * (a `.bin` key holding `hello` would be text/plain).
+     */
+    public function theDetectedMediaTypeIsTheObjectsContentType(): void
+    {
+        $store = $this->requireStore();
+        $filesystem = $this->requireFilesystem();
+        $path = 'ct/' . bin2hex(random_bytes(8)) . '/original.bin';
+
+        $result = $store->write(Fixtures::upload('hello'), 'common', new FixedPathGenerator($path), 'image/png');
+
+        Assert::same($filesystem->mimeType($result->relativePath), 'image/png');
+
+        $store->delete(Fixtures::file(relativePath: $result->relativePath, storeName: 'minio'));
+    }
+
+    /**
+     * More keys than one ListObjectsV2 page (1000), paged the way gc does
+     * with orderedListing declared: the gateway's key order is verified pair
+     * by pair across its own page boundary, and nothing is lost or repeated
+     * (review 1.0 #6, #7).
+     */
+    public function aDeclaredOrderedPassCrossesListingPagesWhole(): void
+    {
+        $filesystem = $this->requireFilesystem();
+        $prefix = 'pass-' . bin2hex(random_bytes(4));
+        $paths = [];
+        for ($i = 0; $i < 1100; $i++) {
+            $path = \sprintf('%s/%s/original.txt', $prefix, md5((string) $i));
+            $filesystem->write($path, 'x');
+            $paths[] = $path;
+        }
+        sort($paths, SORT_STRING);
+        $store = new FlysystemStore(
+            name: 'minio',
+            filesystem: $filesystem,
+            streamFactory: Fixtures::factory(),
+            quarantinePrefix: self::QUARANTINE,
+            orderedListing: true,
+        );
+
+        $seen = [];
+        $after = null;
+        while (($page = iterator_to_array($store->objects($after, 300), preserve_keys: false)) !== []) {
+            foreach ($page as $object) {
+                $after = $object->id->relativePath;
+                if (str_starts_with($after, $prefix . '/')) {
+                    $seen[] = $after;
+                }
+            }
+        }
+
+        Assert::same($seen, $paths);
+
+        $filesystem->deleteDirectory($prefix);
+    }
+
+    /**
+     * A deleted public object must not stay downloadable for the retention:
+     * the move into the quarantine asks for private visibility. Checked
+     * through GetObjectAcl where the gateway implements it.
+     */
+    public function aQuarantinedObjectIsPrivate(): void
+    {
+        $store = $this->requireStore();
+        $filesystem = $this->requireFilesystem();
+        $path = 'acl/' . bin2hex(random_bytes(8)) . '/original.txt';
+        $filesystem->write($path, 'public', ['visibility' => 'public']);
+        if ($filesystem->visibility($path) !== 'public') {
+            throw new SkipTest('The gateway does not report object ACLs; nothing to compare against');
+        }
+
+        $entry = $store->quarantine($store->layout()->deletion(new StoredObjectId($path)), new DateTimeImmutable());
+        \assert($entry instanceof QuarantinedObject);
+
+        Assert::same($filesystem->visibility(self::QUARANTINE . '/' . $entry->token . '/' . $path), 'private');
+
+        $store->purge($entry);
     }
 
     private function isListed(FlysystemStore $store, string $token): bool
@@ -371,7 +495,7 @@ final class MinioIntegrationTest
     private function inInventory(FlysystemStore $store, string $path): bool
     {
         foreach ($store->objects() as $object) {
-            if ($object->relativePath === $path) {
+            if ($object->id->relativePath === $path) {
                 return true;
             }
         }

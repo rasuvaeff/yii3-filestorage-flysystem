@@ -47,6 +47,7 @@ $filesystem = new Filesystem(new AwsS3V3Adapter($client, $bucket));
 // null, because it cannot promise the response headers a policy asks for.
 $store = new FlysystemStore(
     name: 's3',
+    filesystem: $filesystem,
     streamFactory: $factory,
     temporaryUrlOptions: new S3TemporaryUrlOptions(),
 );
