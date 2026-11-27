@@ -8,6 +8,9 @@ use Aws\S3\S3Client;
 use DateTimeImmutable;
 use League\Flysystem\AwsS3V3\AwsS3V3Adapter;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
+use Rasuvaeff\Yii3Filestorage\Store\Layout\FlatSiblingLayout;
+use Rasuvaeff\Yii3Filestorage\Store\QuarantinedObject;
+use Rasuvaeff\Yii3Filestorage\Store\StoredObject;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
 use Rasuvaeff\Yii3Filestorage\Store\StoreResult;
 use Rasuvaeff\Yii3FilestorageFlysystem\AdapterSemantics;
@@ -49,6 +52,8 @@ final class MinioIntegrationTest
 {
     private const string KEY = 'sha/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/original';
 
+    private const string QUARANTINE = '.quarantine-it';
+
     private ?RacingFilesystem $filesystem = null;
     private ?FlysystemStore $store = null;
 
@@ -83,6 +88,7 @@ final class MinioIntegrationTest
             filesystem: $this->filesystem,
             streamFactory: Fixtures::factory(),
             temporaryUrlOptions: new S3TemporaryUrlOptions(),
+            quarantinePrefix: self::QUARANTINE,
         );
     }
 
@@ -239,20 +245,150 @@ final class MinioIntegrationTest
         $store->deleteObject($object);
     }
 
-    public function theInventoryWalksTheBucket(): void
+    /**
+     * The timestamp comes from ListObjectsV2 itself — the orphan sweep's
+     * whole safety against uploads in flight rests on it being there.
+     */
+    public function theInventoryWalksTheBucketWithTimestamps(): void
     {
         $store = $this->requireStore();
+        $before = time() - 60;
 
         $result = $store->write(Fixtures::upload('hello'), 'common', new RandomPathGenerator());
 
-        $paths = array_map(
-            static fn(StoredObjectId $o): string => $o->relativePath,
-            iterator_to_array($store->objects(), preserve_keys: false),
-        );
+        $found = null;
+        foreach ($store->objects() as $object) {
+            Assert::false(str_starts_with($object->relativePath, self::QUARANTINE . '/'));
+            if ($object->relativePath === $result->relativePath) {
+                $found = $object;
+            }
+        }
 
-        Assert::true(\in_array($result->relativePath, $paths, strict: true));
+        Assert::instanceOf($found, StoredObject::class);
+        Assert::true(($found->lastModified?->getTimestamp() ?? 0) >= $before);
+        Assert::true(($found->lastModified?->getTimestamp() ?? PHP_INT_MAX) <= time() + 60);
+        Assert::same($found->size, 5);
 
         $store->delete(Fixtures::file(relativePath: $result->relativePath, storeName: 'minio'));
+    }
+
+    /**
+     * On S3 a move is a copy and a delete, and "directories" are prefixes:
+     * the round trip has to hold over the real API, not just in memory.
+     */
+    public function aKeyDirectoryRoundTripsThroughTheQuarantine(): void
+    {
+        $store = $this->requireStore();
+        $filesystem = $this->requireFilesystem();
+        $result = $store->write(Fixtures::upload('hello'), 'common', new RandomPathGenerator());
+        $id = new StoredObjectId($result->relativePath);
+        $sibling = $id->directory() . '/thumb-v1.webp';
+        $filesystem->write($sibling, 'thumb');
+
+        $entry = $store->quarantine($store->layout()->deletion($id), new DateTimeImmutable());
+
+        Assert::instanceOf($entry, QuarantinedObject::class);
+        Assert::same(\count($entry->objects), 2);
+        Assert::false($filesystem->fileExists($result->relativePath));
+        Assert::false($filesystem->fileExists($sibling));
+        Assert::true($this->isListed($store, $entry->token));
+        Assert::false($this->inInventory($store, $result->relativePath));
+
+        $store->restore($entry);
+
+        Assert::same($filesystem->read($result->relativePath), 'hello');
+        Assert::same($filesystem->read($sibling), 'thumb');
+        Assert::false($this->isListed($store, $entry->token));
+
+        $again = $store->quarantine($store->layout()->deletion($id), new DateTimeImmutable());
+        \assert($again instanceof QuarantinedObject);
+        $store->purge($again);
+
+        Assert::false($filesystem->fileExists($result->relativePath));
+        Assert::false($this->isListed($store, $again->token));
+    }
+
+    /**
+     * Restore is put-if-absent: a key re-published while it was quarantined
+     * keeps the writer's object.
+     */
+    public function aRestoreKeepsARePublication(): void
+    {
+        $store = $this->requireStore();
+        $filesystem = $this->requireFilesystem();
+        $filesystem->write(self::KEY, 'quarantined');
+
+        $entry = $store->quarantine(
+            $store->layout()->deletion(new StoredObjectId(self::KEY)),
+            new DateTimeImmutable(),
+        );
+        \assert($entry instanceof QuarantinedObject);
+        $filesystem->write(self::KEY, 'republished');
+
+        $store->restore($entry);
+
+        Assert::same($filesystem->read(self::KEY), 'republished');
+        Assert::false($this->isListed($store, $entry->token));
+
+        $store->deleteObject(new StoredObjectId(self::KEY));
+    }
+
+    /**
+     * The flat layout resolves siblings with one delimiter listing of the
+     * directory; S3 answers that with CommonPrefixes, which must not count.
+     */
+    public function theFlatLayoutDeletesSiblingsInABucket(): void
+    {
+        $filesystem = $this->requireFilesystem();
+        $directory = 'flat/' . bin2hex(random_bytes(4));
+        foreach (['abc.jpg', 'abc-s-v1.webp', 'abcd.jpg', 'abc/nested.jpg'] as $name) {
+            $filesystem->write($directory . '/' . $name, $name);
+        }
+        $store = new FlysystemStore(
+            name: 'minio',
+            filesystem: $filesystem,
+            streamFactory: Fixtures::factory(),
+            layout: new FlatSiblingLayout(),
+        );
+
+        $store->delete(Fixtures::file(relativePath: $directory . '/abc.jpg', storeName: 'minio'));
+
+        Assert::false($filesystem->fileExists($directory . '/abc.jpg'));
+        Assert::false($filesystem->fileExists($directory . '/abc-s-v1.webp'));
+        Assert::true($filesystem->fileExists($directory . '/abcd.jpg'));
+        Assert::true($filesystem->fileExists($directory . '/abc/nested.jpg'));
+
+        $filesystem->deleteDirectory($directory);
+    }
+
+    private function isListed(FlysystemStore $store, string $token): bool
+    {
+        foreach ($store->quarantined() as $entry) {
+            if ($entry->token === $token) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function inInventory(FlysystemStore $store, string $path): bool
+    {
+        foreach ($store->objects() as $object) {
+            if ($object->relativePath === $path) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function requireFilesystem(): RacingFilesystem
+    {
+        $this->requireStore();
+        \assert($this->filesystem instanceof RacingFilesystem);
+
+        return $this->filesystem;
     }
 
     private function requireStore(): FlysystemStore

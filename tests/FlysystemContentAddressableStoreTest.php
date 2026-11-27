@@ -15,6 +15,9 @@ use Rasuvaeff\Yii3Filestorage\Exception\StoreException;
 use Rasuvaeff\Yii3Filestorage\Exception\UploadTooLargeException;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Store\ContentAddressableStoreInterface;
+use Rasuvaeff\Yii3Filestorage\Store\Layout\FlatSiblingLayout;
+use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectSet;
+use Rasuvaeff\Yii3Filestorage\Store\QuarantinedObject;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
 use Rasuvaeff\Yii3Filestorage\Store\StoreResult;
 use Rasuvaeff\Yii3Filestorage\Upload;
@@ -222,6 +225,85 @@ final class FlysystemContentAddressableStoreTest
 
         $this->store->deleteObject(new StoredObjectId($result->relativePath));
         Assert::false($this->store->exists($file));
+    }
+
+    /**
+     * The quarantine is the base store's too: collected blobs leave and come
+     * back through the same prefix, under the same layout.
+     */
+    public function theQuarantineAndTheLayoutAreTheBaseStores(): void
+    {
+        $layout = new FlatSiblingLayout();
+        $store = new FlysystemContentAddressableStore(
+            store: new FlysystemStore(
+                'flysystem',
+                $this->filesystem,
+                Fixtures::factory(),
+                quarantinePrefix: '.quarantine',
+                layout: $layout,
+            ),
+            filesystem: $this->filesystem,
+            semantics: AdapterSemantics::guaranteed(),
+        );
+        $this->filesystem->write('blobs/ab/cd/abc.jpg', 'x');
+        $this->filesystem->write('blobs/ab/cd/abc-s.webp', 'y');
+
+        Assert::same($store->layout(), $layout);
+        Assert::null($store->quarantineProblem());
+
+        $entry = $store->quarantine(
+            ObjectSet::siblings('blobs/ab/cd', 'abc'),
+            new DateTimeImmutable('@1700000000'),
+        );
+        \assert($entry instanceof QuarantinedObject);
+        Assert::same(\count($entry->objects), 2);
+        Assert::same(iterator_to_array($store->objects(), preserve_keys: false), []);
+
+        $listed = iterator_to_array($store->quarantined(), preserve_keys: false);
+        Assert::same($listed[0]->token, $entry->token);
+        Assert::same(iterator_to_array($store->quarantined(afterToken: $entry->token)), []);
+        Assert::same(\count(iterator_to_array($store->quarantined(limit: 1))), 1);
+
+        $store->restore($entry);
+        Assert::same($this->filesystem->read('blobs/ab/cd/abc.jpg'), 'x');
+
+        $again = $store->quarantine(ObjectSet::siblings('blobs/ab/cd', 'abc'), new DateTimeImmutable());
+        \assert($again instanceof QuarantinedObject);
+        $store->purge($again);
+        Assert::false($this->filesystem->fileExists('blobs/ab/cd/abc.jpg'));
+        Assert::same(iterator_to_array($store->quarantined()), []);
+    }
+
+    public function aStoreWithoutAQuarantineReportsItThroughTheDecorator(): void
+    {
+        Assert::same(
+            $this->store->quarantineProblem(),
+            (new FlysystemStore('flysystem', $this->filesystem, Fixtures::factory()))->quarantineProblem(),
+        );
+        Assert::true($this->store->quarantineProblem() !== null);
+    }
+
+    /**
+     * A content key inside the quarantine would be listed as held bytes,
+     * restored over, purged — never served as the blob it claims to be.
+     */
+    public function aContentKeyInsideTheQuarantineIsRefused(): void
+    {
+        $store = new FlysystemContentAddressableStore(
+            store: new FlysystemStore('flysystem', $this->filesystem, Fixtures::factory(), quarantinePrefix: '_q'),
+            filesystem: $this->filesystem,
+            semantics: AdapterSemantics::guaranteed(),
+        );
+
+        Expect::exception(StoreException::class)->withMessage(
+            'Content-addressed key "_q/ab/abc" lies inside the quarantine of store "flysystem"',
+        );
+
+        try {
+            $store->putIfAbsent(Fixtures::upload(), new StoredObjectId('_q/ab/abc'));
+        } finally {
+            Assert::false($this->filesystem->fileExists('_q/ab/abc'));
+        }
     }
 
     public function deleteRemovesTheWholeDirectory(): void

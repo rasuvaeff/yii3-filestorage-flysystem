@@ -24,7 +24,7 @@ web-пакет.
 
 - PHP 8.3 – 8.6
 - `league/flysystem` ^3.35.3 (v2 не поддерживается)
-- `rasuvaeff/yii3-filestorage` ^0.8.2
+- `rasuvaeff/yii3-filestorage` ^0.9
 - Реализация PSR-17 и любой адаптер Flysystem
 
 ## Установка
@@ -58,6 +58,9 @@ return [
         // попадает в File::$storeName; смена имени после появления файлов
         // осиротит все строки, которые ссылаются на старое
         'name' => 'flysystem',
+        // куда filestorage:gc откладывает объекты перед удалением или
+        // восстановлением; null (по умолчанию) — gc не удаляет из этого store
+        'quarantinePrefix' => '.quarantine',
     ],
 ];
 ```
@@ -67,7 +70,7 @@ return [
 | Возможность | Статус |
 |---|---|
 | `StoreInterface` | Всегда. Запись, чтение, стриминг, удаление, exists, size, last-modified |
-| `MaintenanceStoreInterface` | Всегда. Курсорная инвентаризация и идемпотентное удаление объекта — для `gc` / `verify` / `stat` |
+| `MaintenanceStoreInterface` | Всегда. Курсорная инвентаризация с временем изменения, идемпотентное удаление объекта и карантин — для `gc` / `verify` / `stat` |
 | `StoreUrlProviderInterface` | Реализован всегда, но **nullable по результату**. Публичный или presigned URL, если адаптер умеет; `null`, если нет |
 | `RangeReadableStoreInterface` | **Никогда** — см. ниже |
 | `ContentAddressableStoreInterface` | Только через `FlysystemContentAddressableStore` и только с явным `AdapterSemantics` |
@@ -85,6 +88,38 @@ return [
 загрузку. Там, где адаптер *всё-таки* вернул seekable-поток,
 `rasuvaeff/yii3-filestorage-web` это замечает и отдаёт диапазон сам; где нет —
 корректный ответ полный `200`. Presigned-URL S3 обрабатывает Range внутри S3.
+
+## Раскладка и сборка мусора
+
+```php
+use Rasuvaeff\Yii3Filestorage\Store\Layout\FlatSiblingLayout;
+
+$store = new FlysystemStore(
+    name: 'flysystem',
+    filesystem: $filesystem,
+    streamFactory: $streamFactory,
+    quarantinePrefix: '.quarantine',
+    layout: new FlatSiblingLayout(), // по умолчанию: DirectoryLayout
+);
+```
+
+| Часть | Поведение |
+|---|---|
+| `layout()` | `DirectoryLayout`, если не задано иное. Выбирается один раз на store: смена на существующих данных осиротит все производные |
+| `delete(File)` | `DirectoryLayout`: префикс каталога ключа вместе с производными. `FlatSiblingLayout`: `<base>.<ext>` и `<base>-*` в том же каталоге, одним неглубоким листингом |
+| `objects()` | `StoredObject` с `lastModified` и `size` из самого листинга (S3 `ListObjectsV2`), без запроса на объект. Адаптер без времени даёт null, и `gc` такой объект никогда не сметает. Префикс карантина не листится |
+| `quarantine()` | `move()` в `<prefix>/<token>/<path>` с приватной видимостью — иначе S3-копия Flysystem унесёт в карантин публичный ACL |
+| `restore()` | Put-if-absent по каждому объекту: ключ, переопубликованный за это время, сохраняется. Это `fileExists()` и затем `move()`, а на S3 move — копия плюс удаление: **не атомарно**. Корректно для того, что восстанавливает `gc`, — контентно-адресуемых ключей, где конкурирующий писатель опубликовал те же байты. Восстановленный объект получает видимость файловой системы по умолчанию, как свежая запись |
+| `purge()` / `quarantined()` | Удалить запись; перечислить записи в порядке токенов (времени) |
+| `quarantineProblem()` | Сообщение, если префикс не задан — тогда `gc` отказывается удалять из store |
+
+**Префикс карантина.** Путь, первый сегмент которого начинается с `.` или `_`
+(`.quarantine`, `_trash/gc`). Имена групп и scope начинаются с буквы или цифры,
+поэтому ни один сгенерированный ключ не может оказаться внутри префикса или
+вокруг него; `write()` и `putIfAbsent()` всё равно отвергают такой ключ. Префикс
+лежит в том же bucket, потому что move не пересекает файловые системы, — так что
+на публичном bucket **исключите префикс из политики публичного чтения**. Store не
+умеет проверять политику bucket и не утверждает обратного.
 
 ## Presigned-URL и политика доставки
 

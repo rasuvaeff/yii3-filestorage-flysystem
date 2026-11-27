@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use League\Flysystem\FilesystemOperator;
 use Psr\Http\Message\StreamFactoryInterface;
+use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectLayoutInterface;
 use Rasuvaeff\Yii3Filestorage\Store\StoreInterface;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore;
 use Rasuvaeff\Yii3FilestorageFlysystem\Url\TemporaryUrlOptionsInterface;
@@ -23,15 +24,24 @@ use Rasuvaeff\Yii3FilestorageFlysystem\Url\TemporaryUrlOptionsInterface;
 // TemporaryUrlOptionsInterface is also left to the application: whether
 // presigned URLs can carry a delivery policy depends on the adapter, and
 // unbound means no presigned URLs — which is the safe answer, not a broken one.
+//
+// ObjectLayoutInterface likewise: unbound is DirectoryLayout, the frozen
+// default. An application that chose FlatSiblingLayout binds it once, before
+// the store holds data.
 return [
     StoreInterface::class => static fn (
         FilesystemOperator $filesystem,
         StreamFactoryInterface $streamFactory,
         ?TemporaryUrlOptionsInterface $temporaryUrlOptions = null,
+        ?ObjectLayoutInterface $layout = null,
     ): StoreInterface => new FlysystemStore(
         name: (string) $params['rasuvaeff/yii3-filestorage-flysystem']['name'],
         filesystem: $filesystem,
         streamFactory: $streamFactory,
         temporaryUrlOptions: $temporaryUrlOptions,
+        quarantinePrefix: isset($params['rasuvaeff/yii3-filestorage-flysystem']['quarantinePrefix'])
+            ? (string) $params['rasuvaeff/yii3-filestorage-flysystem']['quarantinePrefix']
+            : null,
+        layout: $layout,
     ),
 ];

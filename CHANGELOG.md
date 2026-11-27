@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.0 — 2026-11-27
+
+Pre-1.0 minor: requires `rasuvaeff/yii3-filestorage` `^0.9`, whose store contract changed.
+
+- **Changed:** requires `rasuvaeff/yii3-filestorage` `^0.9`; this release does not install with core 0.8. Stay on 0.3.2 for 0.8.
+- Enh #18: `layout()`; `FlysystemStore` takes `?ObjectLayoutInterface $layout` (default `DirectoryLayout`). `delete()` removes what the layout names: under `DirectoryLayout` the key directory as before; under `FlatSiblingLayout` the object and its `<base>-*` siblings, found with one shallow listing.
+- Enh #18: `objects()` yields `StoredObject` with `lastModified` and `size` taken from the listing's `FileAttributes` — no request per object; an adapter that omits the timestamp gives null, and `gc` never sweeps such an object.
+- Enh #18: two-phase deletion. `FlysystemStore` takes `?string $quarantinePrefix` (e.g. `.quarantine`, first segment starting with `.` or `_`, so no generated key can lie inside or around it); `quarantine()` moves objects to `<prefix>/<token>/<path>` with private visibility, `restore()` puts them back unless the key was re-published (check-then-move: not atomic on S3, correct for content-addressed keys), `purge()`, `quarantined()`, `quarantineProblem()`. The prefix is hidden from `objects()`, and `write()` / `putIfAbsent()` refuse keys inside it. `FlysystemContentAddressableStore` delegates all of it.
+- **Behaviour:** without a quarantine prefix, `filestorage:gc` no longer deletes from the store, and `filestorage:check` warns. Set `quarantinePrefix` in the params (DI default `null`), and keep the prefix out of any public bucket policy.
+- Fix: `delete()` of an object at the store root under `DirectoryLayout` removed the prefix `<name>/` instead of the object, leaving the file in place.
+- DI: binds the store with an optional `ObjectLayoutInterface` and the new `quarantinePrefix` param.
+
 ## 0.3.2 — 2026-11-27
 
 - Docs: `putIfAbsent()` guarantees atomic publication of identical content, not a single creator. Concurrent writers that both see the key absent both publish and both report `created: true`; the flag is advisory and nothing deletes on it (#16).

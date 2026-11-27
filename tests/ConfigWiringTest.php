@@ -10,6 +10,9 @@ use Psr\Http\Message\StreamFactoryInterface;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Repository\RepositoryInterface;
 use Rasuvaeff\Yii3Filestorage\StorageInterface;
+use Rasuvaeff\Yii3Filestorage\Store\Layout\DirectoryLayout;
+use Rasuvaeff\Yii3Filestorage\Store\Layout\FlatSiblingLayout;
+use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectLayoutInterface;
 use Rasuvaeff\Yii3Filestorage\Store\StoreInterface;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\Fixtures;
@@ -70,6 +73,40 @@ final class ConfigWiringTest
     }
 
     /**
+     * Shipped without a quarantine: a prefix is a name reserved in the
+     * application's bucket, so the application chooses it.
+     */
+    public function theDefaultStoreHasNoQuarantineAndTheDefaultLayout(): void
+    {
+        $store = $this->container()->get(StoreInterface::class);
+
+        Assert::instanceOf($store, FlysystemStore::class);
+        Assert::null($store->quarantinePrefix());
+        Assert::instanceOf($store->layout(), DirectoryLayout::class);
+    }
+
+    public function theQuarantinePrefixParameterReachesTheStore(): void
+    {
+        $params = $this->params();
+        $params['rasuvaeff/yii3-filestorage-flysystem']['quarantinePrefix'] = '.quarantine';
+
+        $store = $this->container(params: $params)->get(StoreInterface::class);
+
+        Assert::instanceOf($store, FlysystemStore::class);
+        Assert::same($store->quarantinePrefix(), '.quarantine');
+        Assert::null($store->quarantineProblem());
+    }
+
+    public function bindingALayoutReachesTheStore(): void
+    {
+        $store = $this->container([
+            ObjectLayoutInterface::class => FlatSiblingLayout::class,
+        ])->get(StoreInterface::class);
+
+        Assert::instanceOf($store->layout(), FlatSiblingLayout::class);
+    }
+
+    /**
      * The one-source rule. Core binds the facade, `-db` the metadata half, this
      * package the physical store. Either side claiming another's key makes
      * installing both a `yiisoft/config` `Duplicate key` error.
@@ -101,14 +138,18 @@ final class ConfigWiringTest
         Assert::true(
             \array_key_exists('name', $this->params()['rasuvaeff/yii3-filestorage-flysystem']),
         );
+        Assert::true(
+            \array_key_exists('quarantinePrefix', $this->params()['rasuvaeff/yii3-filestorage-flysystem']),
+        );
     }
 
     /**
      * @param array<string, mixed> $extra
+     * @param array<string, array<string, mixed>>|null $params
      */
-    private function container(array $extra = []): Container
+    private function container(array $extra = [], ?array $params = null): Container
     {
-        $definitions = $this->definitions();
+        $definitions = $this->definitions($params);
 
         $definitions[StreamFactoryInterface::class] = Psr17Factory::class;
         $definitions[FilesystemOperator::class] = static fn(): FilesystemOperator => Fixtures::filesystem();
@@ -117,11 +158,13 @@ final class ConfigWiringTest
     }
 
     /**
+     * @param array<string, array<string, mixed>>|null $params
+     *
      * @return array<string, mixed>
      */
-    private function definitions(): array
+    private function definitions(?array $params = null): array
     {
-        $params = $this->params();
+        $params ??= $this->params();
 
         return require __DIR__ . '/../config/di.php';
     }
