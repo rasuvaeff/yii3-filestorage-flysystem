@@ -169,6 +169,25 @@ final class ConfigWiringTest
         Assert::true($store->orderedListing());
     }
 
+    public function aBucketIsPrivateByDefault(): void
+    {
+        $store = $this->container()->get(StoreInterface::class);
+
+        Assert::instanceOf($store, FlysystemStore::class);
+        Assert::false($store->isPubliclyReadable());
+    }
+
+    public function thePublicBucketParameterReachesTheStore(): void
+    {
+        $params = $this->params();
+        $params['rasuvaeff/yii3-filestorage-flysystem']['publicBucket'] = true;
+
+        $store = $this->container(params: $params)->get(StoreInterface::class);
+
+        Assert::instanceOf($store, FlysystemStore::class);
+        Assert::true($store->isPubliclyReadable());
+    }
+
     /**
      * The one-source rule. Core binds the facade, `-db` the metadata half, this
      * package the physical store. Either side claiming another's key makes
@@ -205,6 +224,7 @@ final class ConfigWiringTest
             \array_key_exists('quarantinePrefix', $this->params()['rasuvaeff/yii3-filestorage-flysystem']),
         );
         Assert::same($this->params()['rasuvaeff/yii3-filestorage-flysystem']['orderedListing'] ?? null, expected: false);
+        Assert::same($this->params()['rasuvaeff/yii3-filestorage-flysystem']['publicBucket'] ?? null, expected: false);
     }
 
     /**

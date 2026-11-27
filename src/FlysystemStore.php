@@ -26,6 +26,7 @@ use Rasuvaeff\Yii3Filestorage\Store\Layout\DirectoryLayout;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectLayoutInterface;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectSet;
 use Rasuvaeff\Yii3Filestorage\Store\MaintenanceStoreInterface;
+use Rasuvaeff\Yii3Filestorage\Store\PubliclyReadableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\QuarantinedObject;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObject;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
@@ -73,7 +74,10 @@ use Rasuvaeff\Yii3FilestorageFlysystem\Url\TemporaryUrlOptionsInterface;
  *
  * @api
  */
-final readonly class FlysystemStore implements StoreUrlProviderInterface, MaintenanceStoreInterface
+final readonly class FlysystemStore implements
+    StoreUrlProviderInterface,
+    MaintenanceStoreInterface,
+    PubliclyReadableStoreInterface
 {
     private const string NAME_PATTERN = '/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/';
     /**
@@ -117,6 +121,11 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
      *        Every consecutive pair is checked, so a wrong `true` is a
      *        {@see StoreException} on the first out-of-order key, never a
      *        silently shorter inventory.
+     * @param bool $publicBucket The bucket answers every object's URL without
+     *        credentials (a public-read bucket policy or ACL). The operator's
+     *        statement, not something this store can probe: true makes
+     *        `filestorage:check` apply its active-content rule to every group.
+     *        It changes nothing else — no URL, no visibility on write.
      *
      * @throws InvalidArgumentException
      */
@@ -128,6 +137,7 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
         ?string $quarantinePrefix = null,
         ?ObjectLayoutInterface $layout = null,
         private bool $orderedListing = false,
+        private bool $publicBucket = false,
     ) {
         if ($name === '' || preg_match(self::NAME_PATTERN, $name) !== 1) {
             throw new InvalidArgumentException("Invalid store name \"{$name}\"");
@@ -172,6 +182,12 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
     public function orderedListing(): bool
     {
         return $this->orderedListing;
+    }
+
+    #[Override]
+    public function isPubliclyReadable(): bool
+    {
+        return $this->publicBucket;
     }
 
     #[Override]

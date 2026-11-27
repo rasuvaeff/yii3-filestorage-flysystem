@@ -64,6 +64,9 @@ return [
         // true для S3 и S3-совместимых, GCS, Azure: инвентарь читается потоком,
         // а не сортируется раз за проход gc; см. «Порядок листинга»
         'orderedListing' => true,
+        // true, если бакет отдаёт объекты без учётных данных; читает только
+        // filestorage:check, см. «Публичный бакет»
+        'publicBucket' => false,
     ],
 ];
 ```
@@ -82,6 +85,7 @@ return [
 | `StoreInterface` | Всегда. Запись, чтение, стриминг, удаление, exists, size, last-modified |
 | `MaintenanceStoreInterface` | Всегда. Курсорная инвентаризация с временем изменения — один листинг на проход `gc` — и карантин, для `gc` / `verify` / `stat` |
 | `StoreUrlProviderInterface` | Реализован всегда, но **nullable по результату**. Публичный или presigned URL, если адаптер умеет; `null`, если нет |
+| `PubliclyReadableStoreInterface` | Всегда, **отвечает флагом `publicBucket`** (по умолчанию `false`) — см. [Публичный бакет](#публичный-бакет) |
 | `RangeReadableStoreInterface` | **Никогда** — см. ниже |
 | `ContentAddressableStoreInterface` | Только через `FlysystemContentAddressableStore` и только с явным `AdapterSemantics` |
 
@@ -204,12 +208,28 @@ media type как `ContentType` объекта — его и отдаёт пуб
 публичный бакет отдаёт его на скачивание. `putIfAbsent()` media type не
 принимает и оставляет тип адаптеру.
 
-**Публичный бакет `filestorage:check` не видит.** Публичным проверка считает
-только `PublicFileSystemStore` ядра; ответ `publicUrl()` доказательством не
-является — S3-адаптер строит URL объекта и для приватного бакета. Если бакет (или
-CDN перед ним) раздаёт объекты публично, каждый объект доступен по пути, что бы
-ни говорил `allowDirectPublicUrl`: исключите активные типы из `allowedMimeTypes`
-всех групп, которые там хранятся.
+### Публичный бакет
+
+Если бакет (или CDN перед ним) отдаёт объекты без учётных данных, каждый объект
+доступен по пути, что бы ни говорил `allowDirectPublicUrl`, а публичный URL не
+может заставить браузер скачать файл. Скажите об этом через `publicBucket`:
+
+```php
+new FlysystemStore('flysystem', $filesystem, $streams, publicBucket: true);
+// или через DI пакета: params ['rasuvaeff/yii3-filestorage-flysystem']['publicBucket' => true]
+```
+
+Тогда оба store реализуют `PubliclyReadableStoreInterface` ядра с
+`isPubliclyReadable(): true` (`FlysystemContentAddressableStore` отвечает за
+обёрнутый store), и `filestorage:check` считает store публичным: показывает
+возможность `public` и **проваливает каждую группу, принимающую активный
+контент** (HTML, SVG, XML, скрипты) — группы не привязаны к store, так что любая
+может оказаться в бакете. Исключите такие типы из `allowedMimeTypes` всех групп.
+
+Флаг — ваше утверждение, store его не проверяет: ответ `publicUrl()`
+доказательством не является — S3-адаптер строит URL объекта и для приватного
+бакета. Больше флаг ничего не меняет — ни URL, ни видимость при записи. По
+умолчанию `false`, и публичный бакет для `check` невидим.
 
 ## Дедупликация
 

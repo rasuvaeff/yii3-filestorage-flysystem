@@ -17,6 +17,7 @@ use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Store\ContentAddressableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\FlatSiblingLayout;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectSet;
+use Rasuvaeff\Yii3Filestorage\Store\PubliclyReadableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\QuarantinedObject;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
 use Rasuvaeff\Yii3Filestorage\Store\StoreResult;
@@ -269,6 +270,22 @@ final class FlysystemContentAddressableStoreTest
         $store->purge($again);
         Assert::false($this->filesystem->fileExists('blobs/ab/cd/abc.jpg'));
         Assert::same(iterator_to_array($store->quarantined()), []);
+    }
+
+    /**
+     * Deduplicated blobs live in the same bucket: the decorator is exactly as
+     * public as the store it wraps.
+     */
+    public function publicReadabilityIsTheWrappedStores(): void
+    {
+        $public = new FlysystemContentAddressableStore(
+            store: new FlysystemStore('flysystem', $this->filesystem, Fixtures::factory(), publicBucket: true),
+            semantics: AdapterSemantics::guaranteed(),
+        );
+
+        Assert::instanceOf($this->store, PubliclyReadableStoreInterface::class);
+        Assert::false($this->store->isPubliclyReadable());
+        Assert::true($public->isPubliclyReadable());
     }
 
     public function aStoreWithoutAQuarantineReportsItThroughTheDecorator(): void

@@ -65,6 +65,9 @@ return [
         // true for S3 and S3-compatible services, GCS, Azure: the inventory is
         // streamed instead of sorted once per gc pass; see "Listing order"
         'orderedListing' => true,
+        // true when the bucket serves objects without credentials; only
+        // filestorage:check reads it, see "Public bucket"
+        'publicBucket' => false,
     ],
 ];
 ```
@@ -83,6 +86,7 @@ fails at boot with `InvalidConfigException` instead. Bind
 | `StoreInterface` | Always. Write, read, stream, delete, exists, size, last-modified |
 | `MaintenanceStoreInterface` | Always. Cursor-based inventory with timestamps — one listing per `gc` pass — and a quarantine, for `gc` / `verify` / `stat` |
 | `StoreUrlProviderInterface` | Always implemented, **nullable in result**. A public or presigned URL when the adapter can mint one, `null` when it cannot |
+| `PubliclyReadableStoreInterface` | Always, **answers the `publicBucket` flag** (default `false`) — see [Public bucket](#public-bucket) |
 | `RangeReadableStoreInterface` | **Never** — see below |
 | `ContentAddressableStoreInterface` | Only via `FlysystemContentAddressableStore`, and only with an explicit `AdapterSemantics` |
 
@@ -204,12 +208,28 @@ the inert `.bin` key, and the object keeps the type of that key,
 `application/octet-stream`, so a public bucket serves it as a download.
 `putIfAbsent()` takes no media type and leaves it to the adapter.
 
-**A public bucket is invisible to `filestorage:check`.** The check treats only
-core's `PublicFileSystemStore` as public; `publicUrl()` answering is no
-evidence, because the S3 adapter builds an object URL for a private bucket too.
-If the bucket (or a CDN in front of it) serves objects publicly, every object is
-reachable by path whatever `allowDirectPublicUrl` says: keep active types out of
-`allowedMimeTypes` of every group stored there.
+### Public bucket
+
+If the bucket (or a CDN in front of it) serves objects without credentials,
+every object is reachable by path whatever `allowDirectPublicUrl` says, and a
+public URL cannot force a download. Say so with `publicBucket`:
+
+```php
+new FlysystemStore('flysystem', $filesystem, $streams, publicBucket: true);
+// or, through the package's DI: params ['rasuvaeff/yii3-filestorage-flysystem']['publicBucket' => true]
+```
+
+Both stores then implement core's `PubliclyReadableStoreInterface` with
+`isPubliclyReadable(): true` (`FlysystemContentAddressableStore` answers for the
+store it wraps), and `filestorage:check` treats the store as public: it lists
+the `public` capability and **fails every group that accepts active content**
+(HTML, SVG, XML, script) — groups are not bound to stores, so each one could
+land in the bucket. Keep such types out of `allowedMimeTypes` of every group.
+
+The flag is your statement, not something the store probes: `publicUrl()`
+answering is no evidence, because the S3 adapter builds an object URL for a
+private bucket too. It changes nothing else — no URL, no visibility on write.
+The default `false` leaves a public bucket invisible to `check`.
 
 ## Deduplication
 

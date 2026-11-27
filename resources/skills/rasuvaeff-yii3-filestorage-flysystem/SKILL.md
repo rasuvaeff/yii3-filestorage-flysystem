@@ -32,8 +32,10 @@ results. Namespace `Rasuvaeff\Yii3FilestorageFlysystem\`. Full API reference:
    would serve an uploaded HTML file inline from your bucket; returning null
    sends the caller to the proxy route. `S3TemporaryUrlOptions` forces
    `attachment` for every `ActiveMediaTypes` type (an S3 response cannot carry
-   `nosniff`). `filestorage:check` cannot tell a bucket is public — keep active
-   types out of groups stored in one.
+   `nosniff`). A public bucket must be declared (`publicBucket: true` / param
+   `publicBucket`): the store then implements core's
+   `PubliclyReadableStoreInterface` as public and `filestorage:check` fails
+   every group accepting active types. Undeclared, `check` cannot see it.
 
 4. **Deduplication requires both `AdapterSemantics` flags and has no default.**
    Without atomic visibility, `fileExists()` then `write()` is the exact race

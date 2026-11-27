@@ -53,6 +53,7 @@ return [
             quarantinePrefix: isset($settings['quarantinePrefix']) ? (string) $settings['quarantinePrefix'] : null,
             layout: $layout,
             orderedListing: (bool) ($settings['orderedListing'] ?? false),
+            publicBucket: (bool) ($settings['publicBucket'] ?? false),
         );
 
         if ($paths !== null) {

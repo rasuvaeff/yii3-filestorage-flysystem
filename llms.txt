@@ -46,8 +46,10 @@ Binds `StoreInterface` only. Does NOT bind `StorageInterface` (core's),
    key) makes `delete()` throw `StoreException`, deleting nothing.
 10. **Active content is never signed inline.** `S3TemporaryUrlOptions` forces
     `attachment` for `ActiveMediaTypes` (HTML, SVG, XML, script, PDF);
-    `filestorage:check` cannot see a public bucket — keep active types out of
-    groups stored in one.
+    Declare a public bucket with `publicBucket: true` (param `publicBucket`):
+    the store then answers `isPubliclyReadable(): true` (core's
+    `PubliclyReadableStoreInterface`) and `filestorage:check` fails every group
+    that accepts active types. Undeclared, `check` cannot see a public bucket.
 
 ## API reference
 
@@ -65,6 +67,7 @@ new FlysystemStore(
     ?string $quarantinePrefix = null,                // e.g. '.quarantine'; first segment starts with . or _
     ?ObjectLayoutInterface $layout = null,           // null = DirectoryLayout
     bool $orderedListing = false,                    // true: adapter lists in strcmp order (verified)
+    bool $publicBucket = false,                      // true: bucket serves objects without credentials
 );
 ```
 
@@ -83,11 +86,12 @@ new FlysystemStore(
 | `quarantineProblem()` | Message when no prefix is configured, else null |
 | `quarantinePrefix()` / `isQuarantined(string)` | The reserved prefix; whether a path lies inside it |
 | `orderedListing()` | Whether the listing order is trusted (and verified) |
+| `isPubliclyReadable()` | `PubliclyReadableStoreInterface`: the `publicBucket` flag. Read by `filestorage:check` only; changes no URL or visibility |
 
 ### `FlysystemContentAddressableStore`
 
 Adds `ContentAddressableStoreInterface`; delegates everything else to a
-`FlysystemStore`.
+`FlysystemStore` (including `isPubliclyReadable()`).
 
 ```php
 new FlysystemContentAddressableStore(
@@ -151,6 +155,7 @@ the resource does not close the upload's stream.
     'name' => 'flysystem',   // becomes File::$storeName
     'quarantinePrefix' => null, // e.g. '.quarantine'; null = gc cannot delete
     'orderedListing' => false,  // true for S3/GCS/Azure
+    'publicBucket' => false,    // true: check treats the store as public
 ],
 // ObjectLayoutInterface: unbound = DirectoryLayout; bind FlatSiblingLayout to opt in
 // PathGeneratorInterface (core binds one) is checked against the layout at boot: InvalidConfigException

@@ -28,6 +28,7 @@ use Rasuvaeff\Yii3Filestorage\Exception\UploadSizeException;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Store\ContentAddressableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\MaintenanceStoreInterface;
+use Rasuvaeff\Yii3Filestorage\Store\PubliclyReadableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\RangeReadableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObject;
 use Rasuvaeff\Yii3Filestorage\Store\StoreUrlProviderInterface;
@@ -63,6 +64,23 @@ final class FlysystemStoreTest
     public function keepsTheNameItWasGiven(): void
     {
         Assert::same($this->store->name(), 'flysystem');
+    }
+
+    /**
+     * Whether a bucket is public is configuration, not a class: the store
+     * answers what it was told, and a bucket nobody declared is private.
+     */
+    public function aBucketIsNotPubliclyReadableUnlessDeclared(): void
+    {
+        Assert::instanceOf($this->store, PubliclyReadableStoreInterface::class);
+        Assert::false($this->store->isPubliclyReadable());
+    }
+
+    public function aBucketDeclaredPublicSaysSo(): void
+    {
+        $store = new FlysystemStore('flysystem', $this->filesystem, Fixtures::factory(), publicBucket: true);
+
+        Assert::true($store->isPubliclyReadable());
     }
 
     #[DataProvider('invalidNameProvider')]

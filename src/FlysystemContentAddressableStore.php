@@ -18,6 +18,7 @@ use Rasuvaeff\Yii3Filestorage\Store\ContentAddressableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectLayoutInterface;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectSet;
 use Rasuvaeff\Yii3Filestorage\Store\MaintenanceStoreInterface;
+use Rasuvaeff\Yii3Filestorage\Store\PubliclyReadableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\QuarantinedObject;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
 use Rasuvaeff\Yii3Filestorage\Store\StoreResult;
@@ -45,7 +46,8 @@ use Rasuvaeff\Yii3FilestorageFlysystem\Stream\StreamWrapper;
 final readonly class FlysystemContentAddressableStore implements
     ContentAddressableStoreInterface,
     MaintenanceStoreInterface,
-    StoreUrlProviderInterface
+    StoreUrlProviderInterface,
+    PubliclyReadableStoreInterface
 {
     private const int MEASURE_CHUNK = 262_144;
 
@@ -212,6 +214,15 @@ final readonly class FlysystemContentAddressableStore implements
     public function layout(): ObjectLayoutInterface
     {
         return $this->store->layout();
+    }
+
+    /**
+     * The wrapped store's answer: deduplicated blobs live in the same bucket.
+     */
+    #[Override]
+    public function isPubliclyReadable(): bool
+    {
+        return $this->store->isPubliclyReadable();
     }
 
     #[Override]

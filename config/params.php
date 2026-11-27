@@ -19,5 +19,10 @@ return [
         // streamed instead of sorted once per gc pass; a wrong true is caught
         // on the first out-of-order key (StoreException), never a short pass.
         'orderedListing' => false,
+        // Whether the bucket answers every object's URL without credentials
+        // (a public-read policy or ACL). Only filestorage:check reads it: it
+        // then fails any group that accepts active content (HTML, SVG, XML),
+        // because a public URL cannot force a download. Changes no behaviour.
+        'publicBucket' => false,
     ],
 ];

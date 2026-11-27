@@ -9,8 +9,9 @@ Azure, FTP, anything with an adapter. Namespace
 `Rasuvaeff\Yii3FilestorageFlysystem`.
 
 Public API: `FlysystemStore` (`StoreUrlProviderInterface` +
-`MaintenanceStoreInterface`, with layout and quarantine), `FlysystemContentAddressableStore`
-(adds `ContentAddressableStoreInterface`), `AdapterSemantics`,
+`MaintenanceStoreInterface` + `PubliclyReadableStoreInterface`, with layout and
+quarantine), `FlysystemContentAddressableStore` (adds
+`ContentAddressableStoreInterface`), `AdapterSemantics`,
 `Url\TemporaryUrlOptionsInterface` with `Url\S3TemporaryUrlOptions`.
 `Stream\StreamWrapper`, `Listing\Continuation` and `FlysystemStore::filesystem()`
 are `@internal`.
@@ -190,6 +191,13 @@ unassigned variable, which is also null.
   those `.bin` so a public bucket serves them as octet-stream, and storing
   `image/svg+xml` would undo that (core review 1.0 B5). `putIfAbsent()` has no
   media type.
+- **`publicBucket` is a statement, not a capability switch.** Both stores
+  implement core's `PubliclyReadableStoreInterface` for every adapter and answer
+  the flag (the CA store answers for the store it wraps) — that is a result, as
+  golden rule 3 asks, not a conditional interface. Only `filestorage:check`
+  reads it (`PublicBucketCheckTest` runs core's `CheckCommand` against both
+  stores). Never let it change URLs or write visibility, and never infer it from
+  `publicUrl()` — an S3 adapter builds that URL for a private bucket too.
 - **`objects()` takes `lastModified` / `size` from the listing.** Null stays
   null — the core sweep never deletes an undated object. Do not add a
   per-object `lastModified()` request, and never substitute "now" or 0.
