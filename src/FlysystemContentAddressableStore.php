@@ -10,7 +10,7 @@ use League\Flysystem\FilesystemOperator;
 use Override;
 use Psr\Http\Message\StreamInterface;
 use Rasuvaeff\Yii3Filestorage\Exception\StoreException;
-use Rasuvaeff\Yii3Filestorage\Exception\UploadTooLargeException;
+use Rasuvaeff\Yii3Filestorage\Exception\UploadSizeException;
 use Rasuvaeff\Yii3Filestorage\File;
 use Rasuvaeff\Yii3Filestorage\Path\PathGeneratorInterface;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryOptions;
@@ -113,7 +113,7 @@ final readonly class FlysystemContentAddressableStore implements
         }
 
         if ($maxBytes > 0 && $declared !== null && $declared > $maxBytes) {
-            throw new UploadTooLargeException(
+            throw new UploadSizeException(
                 "Upload of {$declared} bytes exceeds the {$maxBytes} byte limit",
             );
         }
@@ -143,7 +143,7 @@ final readonly class FlysystemContentAddressableStore implements
                     // how the bytes got there. Reusing past it would let a
                     // group's limit be bypassed by anything that uploaded the
                     // same content under a laxer one.
-                    throw new UploadTooLargeException(
+                    throw new UploadSizeException(
                         "Upload of {$existing} bytes exceeds the {$maxBytes} byte limit",
                     );
                 }
@@ -167,7 +167,7 @@ final readonly class FlysystemContentAddressableStore implements
             // writer that got here first, so removing it is not ours to do. The
             // ledger's grace period and collection pass reclaim it if nothing
             // commits against it.
-            throw new UploadTooLargeException(
+            throw new UploadSizeException(
                 "Upload of {$written} bytes exceeds the {$maxBytes} byte limit",
             );
         }
@@ -255,12 +255,6 @@ final readonly class FlysystemContentAddressableStore implements
         int $limit = 1000,
     ): iterable {
         return $this->store->objects($afterPath, $limit);
-    }
-
-    #[Override]
-    public function deleteObject(StoredObjectId $object): void
-    {
-        $this->store->deleteObject($object);
     }
 
     #[Override]

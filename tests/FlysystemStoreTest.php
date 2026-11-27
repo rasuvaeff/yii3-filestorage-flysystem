@@ -25,7 +25,7 @@ use Rasuvaeff\Understudy\Arg;
 use Rasuvaeff\Understudy\Invocation;
 use Rasuvaeff\Understudy\Understudy;
 use Rasuvaeff\Yii3Filestorage\Exception\StoreException;
-use Rasuvaeff\Yii3Filestorage\Exception\UploadTooLargeException;
+use Rasuvaeff\Yii3Filestorage\Exception\UploadSizeException;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Store\ContentAddressableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\MaintenanceStoreInterface;
@@ -144,7 +144,7 @@ final class FlysystemStoreTest
      */
     public function aKnownOversizedUploadIsRefusedBeforeAnyWrite(): void
     {
-        Expect::exception(UploadTooLargeException::class)->withMessageContaining('exceeds the 3 byte limit');
+        Expect::exception(UploadSizeException::class)->withMessageContaining('exceeds the 3 byte limit');
 
         $this->store->write(
             upload: Fixtures::upload('hello'),
@@ -158,7 +158,7 @@ final class FlysystemStoreTest
     {
         try {
             $this->store->write(Fixtures::upload('hello'), 'common', new RandomPathGenerator(), maxBytes: 3);
-        } catch (UploadTooLargeException) {
+        } catch (UploadSizeException) {
             // asserted in its own test
         }
 
@@ -182,7 +182,7 @@ final class FlysystemStoreTest
         try {
             $this->store->write($upload, 'common', new RandomPathGenerator(), maxBytes: 3);
             Assert::fail('the cap should have refused this upload');
-        } catch (UploadTooLargeException $e) {
+        } catch (UploadSizeException $e) {
             Assert::string($e->getMessage())->contains('exceeds the 3 byte limit');
         }
 
@@ -287,31 +287,16 @@ final class FlysystemStoreTest
         }
 
         $first = array_map(
-            static fn(StoredObject $o): string => $o->relativePath,
+            static fn(StoredObject $o): string => $o->id->relativePath,
             iterator_to_array($this->store->objects(limit: 2), preserve_keys: false),
         );
         $rest = array_map(
-            static fn(StoredObject $o): string => $o->relativePath,
+            static fn(StoredObject $o): string => $o->id->relativePath,
             iterator_to_array($this->store->objects(afterPath: 'g/b/original.txt'), preserve_keys: false),
         );
 
         Assert::same($first, ['g/a/original.txt', 'g/b/original.txt']);
         Assert::same($rest, ['g/c/original.txt']);
-    }
-
-    /**
-     * A retried collection pass has to converge, not fail on the second
-     * attempt at an object the first one already removed.
-     */
-    public function deleteObjectRemovesOneObjectAndIsIdempotent(): void
-    {
-        $this->filesystem->write('g/a/original.txt', 'a');
-        $object = new StoredObjectId('g/a/original.txt');
-
-        $this->store->deleteObject($object);
-        $this->store->deleteObject($object);
-
-        Assert::false($this->filesystem->fileExists('g/a/original.txt'));
     }
 
     /**
@@ -614,7 +599,7 @@ final class FlysystemStoreTest
         );
 
         $toPaths = static fn(iterable $objects): array => array_map(
-            static fn(StoredObject $id): string => $id->relativePath,
+            static fn(StoredObject $o): string => $o->id->relativePath,
             iterator_to_array($objects, preserve_keys: false),
         );
         $rawOrder = array_values(array_map(
@@ -643,7 +628,7 @@ final class FlysystemStoreTest
             Fixtures::factory(),
         );
 
-        Expect::exception(UploadTooLargeException::class)->withMessageContaining('exceeds the 3 byte limit');
+        Expect::exception(UploadSizeException::class)->withMessageContaining('exceeds the 3 byte limit');
 
         $store->write(Fixtures::upload('hello'), 'common', new RandomPathGenerator(), maxBytes: 3);
     }
@@ -700,15 +685,28 @@ final class FlysystemStoreTest
         );
     }
 
-    public function aFailedObjectDeleteBecomesAStoreExceptionCarryingTheCause(): void
+    /**
+     * An over-cap object that cannot be removed again is a store failure, not
+     * a size refusal: the caller must learn that bytes were left behind.
+     */
+    public function aFailedRemovalOfAnOverCapObjectBecomesAStoreExceptionCarryingTheCause(): void
     {
         $cause = UnableToDeleteFile::atLocation('g/a/original.txt', 'denied');
         $filesystem = Understudy::strict(Understudy::for(FilesystemOperator::class));
+        when(fn() => $filesystem->fileExists(Arg::any()))->returns(false);
+        when(fn() => $filesystem->writeStream(Arg::any(), Arg::any(), Arg::any()))->returns(null);
+        when(fn() => $filesystem->fileSize(Arg::any()))->returns(5);
         when(fn() => $filesystem->delete(Arg::any()))->answers(static fn(): never => throw $cause);
         $store = new FlysystemStore('flysystem', $filesystem, Fixtures::factory());
+        $factory = Fixtures::factory();
+        $upload = \Rasuvaeff\Yii3Filestorage\Upload::fromStream(
+            new UnsizedStream($factory->createStream('hello')),
+            'a.txt',
+            $factory,
+        );
 
         $this->assertStoreFailure(
-            static fn() => $store->deleteObject(new StoredObjectId('g/a/original.txt')),
+            static fn() => $store->write($upload, 'g', new FixedPathGenerator('g/a/original.txt'), maxBytes: 3),
             'Could not delete "g/a/original.txt" from store "flysystem"',
             $cause,
         );

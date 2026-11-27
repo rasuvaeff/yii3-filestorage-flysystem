@@ -39,10 +39,22 @@ final class S3TemporaryUrlOptionsTest
 
     public function inlineDeliveryIsSpelledOut(): void
     {
+        $config = $this->options->for($this->deliveryOf('photo.png', forceDownload: false, mimeType: 'image/png'));
+
+        Assert::string((string) ($config['get_object_options']['ResponseContentDisposition'] ?? ''))
+            ->contains('inline; filename="photo.png"');
+    }
+
+    /**
+     * PDF is an active (plugin) type since core 0.10: a presigned URL serves
+     * it as an attachment even for a group whose policy says inline.
+     */
+    public function aPdfIsAnAttachmentWhateverThePolicySays(): void
+    {
         $config = $this->options->for($this->deliveryOf('report.pdf', forceDownload: false));
 
         Assert::string((string) ($config['get_object_options']['ResponseContentDisposition'] ?? ''))
-            ->contains('inline; filename="report.pdf"');
+            ->contains('attachment; filename="report.pdf"');
     }
 
     /**
@@ -72,7 +84,11 @@ final class S3TemporaryUrlOptionsTest
         Assert::string($disposition)->contains('filename="_____.pdf"');
     }
 
-    private function deliveryOf(string $name, bool $forceDownload = true): DeliveryOptions
+    private function deliveryOf(
+        string $name,
+        bool $forceDownload = true,
+        string $mimeType = 'application/pdf',
+    ): DeliveryOptions
     {
         return DeliveryOptions::fromFile(
             file: File::create(
@@ -83,7 +99,7 @@ final class S3TemporaryUrlOptionsTest
                 originalName: $name,
                 size: 1,
                 createdAt: new DateTimeImmutable('2026-01-01T00:00:00.000000+00:00'),
-                mimeType: 'application/pdf',
+                mimeType: $mimeType,
             ),
             policy: new DeliveryPolicy(allowDirectPublicUrl: false, forceDownload: $forceDownload),
         );

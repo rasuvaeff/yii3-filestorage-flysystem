@@ -12,7 +12,7 @@ use League\Flysystem\UnableToWriteFile;
 use Rasuvaeff\Understudy\Arg;
 use Rasuvaeff\Understudy\Understudy;
 use Rasuvaeff\Yii3Filestorage\Exception\StoreException;
-use Rasuvaeff\Yii3Filestorage\Exception\UploadTooLargeException;
+use Rasuvaeff\Yii3Filestorage\Exception\UploadSizeException;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Store\ContentAddressableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\FlatSiblingLayout;
@@ -147,7 +147,7 @@ final class FlysystemContentAddressableStoreTest
 
     public function aKnownOversizedUploadIsRefusedBeforeAnyWrite(): void
     {
-        Expect::exception(UploadTooLargeException::class)->withMessageContaining('exceeds the 3 byte limit');
+        Expect::exception(UploadSizeException::class)->withMessageContaining('exceeds the 3 byte limit');
 
         $this->store->putIfAbsent(Fixtures::upload('hello'), new StoredObjectId(self::KEY), maxBytes: 3);
     }
@@ -183,7 +183,7 @@ final class FlysystemContentAddressableStoreTest
         try {
             $this->store->putIfAbsent($upload, new StoredObjectId(self::KEY), maxBytes: 3);
             Assert::fail('the cap should have refused this upload');
-        } catch (UploadTooLargeException $e) {
+        } catch (UploadSizeException $e) {
             Assert::string($e->getMessage())->contains('exceeds the 3 byte limit');
         }
 
@@ -194,7 +194,7 @@ final class FlysystemContentAddressableStoreTest
     {
         try {
             $this->store->putIfAbsent(Fixtures::upload('hello'), new StoredObjectId(self::KEY), maxBytes: 3);
-        } catch (UploadTooLargeException) {
+        } catch (UploadSizeException) {
             // asserted in its own test
         }
 
@@ -223,7 +223,7 @@ final class FlysystemContentAddressableStoreTest
         );
         Assert::same(\count(iterator_to_array($this->store->objects(), preserve_keys: false)), 1);
 
-        $this->store->deleteObject(new StoredObjectId($result->relativePath));
+        $this->store->delete($file);
         Assert::false($this->store->exists($file));
     }
 
@@ -391,7 +391,7 @@ final class FlysystemContentAddressableStoreTest
     {
         $this->filesystem->write(self::KEY, 'hello');
 
-        Expect::exception(UploadTooLargeException::class)->withMessageContaining('exceeds the 2 byte limit');
+        Expect::exception(UploadSizeException::class)->withMessageContaining('exceeds the 2 byte limit');
 
         $this->store->putIfAbsent($this->unsizedUpload('hello'), new StoredObjectId(self::KEY), maxBytes: 2);
     }

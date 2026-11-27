@@ -643,7 +643,7 @@ final class FlysystemStoreQuarantineTest
     {
         $paths = [];
         foreach ($this->store->objects() as $object) {
-            $paths[] = $object->relativePath;
+            $paths[] = $object->id->relativePath;
         }
         sort($paths);
 

@@ -16,7 +16,7 @@ use Override;
 use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Http\Message\StreamInterface;
 use Rasuvaeff\Yii3Filestorage\Exception\StoreException;
-use Rasuvaeff\Yii3Filestorage\Exception\UploadTooLargeException;
+use Rasuvaeff\Yii3Filestorage\Exception\UploadSizeException;
 use Rasuvaeff\Yii3Filestorage\File;
 use Rasuvaeff\Yii3Filestorage\Path\PathGeneratorInterface;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryOptions;
@@ -194,7 +194,7 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
 
         $declared = $upload->size();
         if ($maxBytes > 0 && $declared !== null && $declared > $maxBytes) {
-            throw new UploadTooLargeException(
+            throw new UploadSizeException(
                 "Upload of {$declared} bytes exceeds the {$maxBytes} byte limit for group \"{$groupName}\"",
             );
         }
@@ -218,7 +218,7 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
         if ($maxBytes > 0 && $written > $maxBytes) {
             $this->deleteObject($object);
 
-            throw new UploadTooLargeException(
+            throw new UploadSizeException(
                 "Upload of {$written} bytes exceeds the {$maxBytes} byte limit for group \"{$groupName}\"",
             );
         }
@@ -456,8 +456,7 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
         }
     }
 
-    #[Override]
-    public function deleteObject(StoredObjectId $object): void
+    private function deleteObject(StoredObjectId $object): void
     {
         try {
             // Flysystem's delete() is already idempotent on a missing object,

@@ -204,7 +204,7 @@ final class MinioIntegrationTest
         Assert::false($second->created);
         Assert::same($second->size, 5);
 
-        $store->deleteObject($object);
+        $this->filesystem?->delete($object->relativePath);
     }
 
     /**
@@ -226,7 +226,7 @@ final class MinioIntegrationTest
             semantics: AdapterSemantics::guaranteed(),
         );
         $object = new StoredObjectId(self::KEY);
-        $store->deleteObject($object);
+        $this->filesystem?->delete($object->relativePath);
 
         $second = null;
         $filesystem->raceOnNextExistenceCheck(static function () use ($store, $object, &$second): void {
@@ -242,7 +242,7 @@ final class MinioIntegrationTest
         Assert::same($second->size, 5);
         Assert::same($filesystem->read(self::KEY), 'hello');
 
-        $store->deleteObject($object);
+        $this->filesystem?->delete($object->relativePath);
     }
 
     /**

@@ -132,7 +132,6 @@ final class FlysystemStoreLayoutTest
         Assert::same(\count($objects), 1);
         Assert::instanceOf($objects[0], StoredObject::class);
         Assert::same($objects[0]->id->relativePath, 'g/a/original.txt');
-        Assert::same($objects[0]->relativePath, 'g/a/original.txt');
         Assert::same($objects[0]->lastModified?->getTimestamp(), 1_700_000_000);
         Assert::same($objects[0]->size, 3);
     }
@@ -188,7 +187,7 @@ final class FlysystemStoreLayoutTest
             );
 
             $paths = array_map(
-                static fn(StoredObject $o): string => $o->relativePath,
+                static fn(StoredObject $o): string => $o->id->relativePath,
                 iterator_to_array($store->objects(), preserve_keys: false),
             );
             sort($paths);
