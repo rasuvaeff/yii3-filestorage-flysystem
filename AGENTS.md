@@ -9,7 +9,7 @@ Azure, FTP, anything with an adapter. Namespace
 `Rasuvaeff\Yii3FilestorageFlysystem`.
 
 Public API: `FlysystemStore` (`StoreUrlProviderInterface` +
-`MaintenanceStoreInterface`), `FlysystemContentAddressableStore`
+`MaintenanceStoreInterface`, with layout and quarantine), `FlysystemContentAddressableStore`
 (adds `ContentAddressableStoreInterface`), `AdapterSemantics`,
 `Url\TemporaryUrlOptionsInterface` with `Url\S3TemporaryUrlOptions`.
 `Stream\StreamWrapper` is `@internal`.
@@ -89,15 +89,18 @@ nothing was tested. Check the word before believing the colour.
 
 `minMsi` is **88**. `composer mutation` runs Infection with `--with-uncovered`
 (code the tests execute but do not name in `#[Covers]` is mutated too), so the
-number is the overall MSI: 236 of 245 counted mutants killed (about 96%), with
+number is the overall MSI: 409 of 418 counted mutants killed (about 98%, CI
+2026-11-27), with
 the template's signature-default ignore and Public/ProtectedVisibility off. The
-12 ignored mutants are `type $name = default,` signature lines; the signatures
-that carry them (`objects()`, `putIfAbsent()`, `guaranteed()`) are written one
+16 ignored mutants are `type $name = default,` signature lines; the signatures
+that carry them (`objects()`, `quarantined()`, `putIfAbsent()`, `guaranteed()`) are written one
 parameter per line so the ignore applies. Every fault the store distinguishes
 has a test that breaks it that specific way: missing vs. unreachable vs.
 present-but-unreadable, a declared size trusted over a re-measurement, the
-reuse cap's own boundary distinct from the pre-write one, and a pre-write
-refusal that never touches the filesystem. The survivors are the groups below:
+reuse cap's own boundary distinct from the pre-write one, a pre-write
+refusal that never touches the filesystem, and — for the quarantine — a
+vanished member vs. a failed move vs. an unreachable probe, a restore that
+skips only the re-published member, and the exact depth of every listing. The survivors are the groups below:
 
 | Group | Example | Why no test kills it |
 |---|---|---|
@@ -138,6 +141,30 @@ unassigned variable, which is also null.
   contract, not a bug: no caller deletes on `created`, the ledger's reservations
   decide. Do not "fix" it with S3 `If-None-Match` — Flysystem 3's S3 adapter
   drops the option, and it would hold for one adapter only (golden rule 3).
+- **The quarantine prefix is reserved namespace.** Its first segment starts
+  with `.` or `_`, which no group or scope name can, so no generated key lies
+  inside or around it. `objects()` skips it, `write()` / `putIfAbsent()` /
+  `restore()` refuse targets in it. Moves into it pass
+  `visibility: private` — Flysystem's S3 copy retains the source ACL
+  otherwise, and a deleted public object stays downloadable for the whole
+  retention. Restores pass `retain_visibility: false`, so the object gets the
+  filesystem's default visibility like a fresh write.
+- **`restore()` is check-then-move and not atomic on S3** (a move there is a
+  copy plus a delete). Correct only because what `gc` restores are
+  content-addressed keys: a writer that won the race wrote the same bytes. Do
+  not reuse it for mutable keys.
+- **`objects()` takes `lastModified` / `size` from the listing.** Null stays
+  null — the core sweep never deletes an undated object. Do not add a
+  per-object `lastModified()` request, and never substitute "now" or 0.
+- **The layout decides `delete()`.** `DirectoryLayout`: `deleteDirectory()` on
+  the key prefix, or `delete()` on the object itself when it sits at the store
+  root (its "directory" is itself). `FlatSiblingLayout`: one **shallow**
+  listing of the directory — a deep one would walk every subdirectory to find
+  nothing (`everyListingIsAsNarrowAsTheLayoutAllows` pins this).
+- No `DerivativeAwareStoreInterface`: its `writeDerivative()` demands a
+  mid-write cap this store cannot enforce (golden rule 3). `-images` therefore
+  cannot target a Flysystem store; the layout only governs `delete()` and the
+  quarantine set here.
 - **Byte caps cannot be enforced mid-write here.** Checked before, verified
   after, object removed on violation. Do not "fix" this into a streaming
   counter — a remote PUT has no abort, and the pre-check plus `Upload`'s spool

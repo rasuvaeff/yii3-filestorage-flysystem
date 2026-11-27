@@ -46,16 +46,25 @@ results. Namespace `Rasuvaeff\Yii3FilestorageFlysystem\`. Full API reference:
    `write()`; `putIfAbsent()` leaves an over-cap object to the ledger grace
    period and `gc`, since another writer may already reference it).
 
-7. **No suppressions.** No `@psalm-suppress`, no baseline. Fix the root cause.
+7. **The quarantine prefix is reserved.** Never list it in `objects()`, never
+   write or restore into it, always move into it with private visibility.
+   `restore()` is check-then-move: not atomic on S3, correct only because the
+   keys it restores are content hashes.
 
-8. **Verification is mandatory.** `make build`, plus `make test-integration`
+8. **No suppressions.** No `@psalm-suppress`, no baseline. Fix the root cause.
+
+9. **Verification is mandatory.** `make build`, plus `make test-integration`
    against MinIO for anything touching URLs, uploads or dedup.
 
 ## Gotchas
 
 - An empty-string URL is not a URL — it resolves to the current page.
-- `delete(File)` removes the file's *directory* prefix, so derivatives written
-  beside the original go with it. Deleting only the object leaks them.
+- `delete(File)` removes what the layout names — under `DirectoryLayout` the
+  file's *directory* prefix, under `FlatSiblingLayout` the `<base>-*` siblings —
+  so derivatives go with it. Deleting only the object leaks them.
+- Without `quarantinePrefix`, `filestorage:gc` cannot delete from the store.
+- `objects()` takes `lastModified` from the listing; null means "never sweep",
+  so do not fill it with "now" or 0.
 - `StreamWrapper::stream_close()` intentionally leaves the upload's stream open;
   `Upload` promises `stream()` is readable again, and retries depend on it.
 - The unit suite uses the in-memory adapter, which has no URL generator, no

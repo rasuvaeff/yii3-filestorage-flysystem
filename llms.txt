@@ -31,6 +31,10 @@ Binds `StoreInterface` only. Does NOT bind `StorageInterface` (core's),
    hands a second writer a half-uploaded object.
 6. **Byte caps are checked before the write and verified after it.** A remote
    PUT has no abort.
+7. **Garbage collection needs a quarantine prefix.** Without `quarantinePrefix`
+   `gc` cannot delete from the store. The prefix's first segment starts with `.`
+   or `_`; keep it out of any public bucket policy. `restore()` is
+   check-then-move — not atomic on S3, correct for content-addressed keys.
 
 ## API reference
 
@@ -45,18 +49,27 @@ new FlysystemStore(
     FilesystemOperator $filesystem,
     StreamFactoryInterface $streamFactory,
     ?TemporaryUrlOptionsInterface $temporaryUrlOptions = null,
+    ?AdapterSemantics $semantics = null,
+    ?string $quarantinePrefix = null,                // e.g. '.quarantine'; first segment starts with . or _
+    ?ObjectLayoutInterface $layout = null,           // null = DirectoryLayout
 );
 ```
 
 | Method | Notes |
 |---|---|
 | `write(Upload, string $group, PathGeneratorInterface, ?string $mediaType, int $maxBytes)` | `StoreException` on a path collision — never silent sharing. `UploadTooLargeException` before the write for a known-oversized body, after it for one that under-reported (object removed) |
-| `delete(File)` | Deletes the file's *directory* prefix — derivatives included |
+| `layout()` | The configured `ObjectLayoutInterface` (`DirectoryLayout` by default) |
+| `delete(File)` | Deletes what `layout()->deletion()` names: the key directory prefix (`DirectoryLayout`) or `<base>.<ext>` + `<base>-*` siblings (`FlatSiblingLayout`) — derivatives included |
 | `exists()` / `size()` / `lastModified()` / `stream()` | `null` / `false` on a missing object, never an exception |
 | `publicUrl(File)` | `null` when the adapter has no generator or returns an empty string |
 | `temporaryUrl(File, DateTimeImmutable, DeliveryOptions)` | `null` without an options mapper, or when the generator refuses |
-| `objects(?string $afterPath, int $limit)` | Path-ordered, resumable inventory of `StoredObjectId` |
+| `objects(?string $afterPath, int $limit)` | Path-ordered, resumable inventory of `StoredObject` (`id`, `relativePath`, `lastModified`, `size` from the listing; null timestamp = never swept). Never lists the quarantine |
 | `deleteObject(StoredObjectId)` | Idempotent |
+| `quarantine(ObjectSet, DateTimeImmutable)` | Moves existing members to `<prefix>/<token>/<path>`, private visibility; null when none existed. `StoreException` without a prefix |
+| `restore(QuarantinedObject)` | Put-if-absent per object, then purges the entry. Idempotent |
+| `purge(QuarantinedObject)` / `quarantined(?string $afterToken, int $limit)` | Delete an entry / list entries in token order |
+| `quarantineProblem()` | Message when no prefix is configured, else null |
+| `quarantinePrefix()` / `isQuarantined(string)` | The reserved prefix; whether a path lies inside it |
 
 ### `FlysystemContentAddressableStore`
 
@@ -119,5 +132,7 @@ the resource does not close the upload's stream.
 ```php
 'rasuvaeff/yii3-filestorage-flysystem' => [
     'name' => 'flysystem',   // becomes File::$storeName
+    'quarantinePrefix' => null, // e.g. '.quarantine'; null = gc cannot delete
 ],
+// ObjectLayoutInterface: unbound = DirectoryLayout; bind FlatSiblingLayout to opt in
 ```

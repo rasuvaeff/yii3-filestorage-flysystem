@@ -30,6 +30,7 @@ use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Store\ContentAddressableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\MaintenanceStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\RangeReadableStoreInterface;
+use Rasuvaeff\Yii3Filestorage\Store\StoredObject;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
 use Rasuvaeff\Yii3Filestorage\Store\StoreUrlProviderInterface;
 use Rasuvaeff\Yii3Filestorage\Upload;
@@ -286,11 +287,11 @@ final class FlysystemStoreTest
         }
 
         $first = array_map(
-            static fn(StoredObjectId $o): string => $o->relativePath,
+            static fn(StoredObject $o): string => $o->relativePath,
             iterator_to_array($this->store->objects(limit: 2), preserve_keys: false),
         );
         $rest = array_map(
-            static fn(StoredObjectId $o): string => $o->relativePath,
+            static fn(StoredObject $o): string => $o->relativePath,
             iterator_to_array($this->store->objects(afterPath: 'g/b/original.txt'), preserve_keys: false),
         );
 
@@ -613,7 +614,7 @@ final class FlysystemStoreTest
         );
 
         $toPaths = static fn(iterable $objects): array => array_map(
-            static fn(StoredObjectId $id): string => $id->relativePath,
+            static fn(StoredObject $id): string => $id->relativePath,
             iterator_to_array($objects, preserve_keys: false),
         );
         $rawOrder = array_values(array_map(

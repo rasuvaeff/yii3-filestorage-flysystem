@@ -24,7 +24,7 @@ against it.
 
 - PHP 8.3 – 8.6
 - `league/flysystem` ^3.35.3 (v2 is not supported)
-- `rasuvaeff/yii3-filestorage` ^0.8.2
+- `rasuvaeff/yii3-filestorage` ^0.9
 - A PSR-17 implementation, and a Flysystem adapter of your choice
 
 ## Installation
@@ -59,6 +59,9 @@ return [
         // appears in File::$storeName; changing it after files exist orphans
         // every row that names the old one
         'name' => 'flysystem',
+        // where filestorage:gc parks objects before purging or restoring them;
+        // null (the default) means gc cannot delete from this store
+        'quarantinePrefix' => '.quarantine',
     ],
 ];
 ```
@@ -68,7 +71,7 @@ return [
 | Capability | Status |
 |---|---|
 | `StoreInterface` | Always. Write, read, stream, delete, exists, size, last-modified |
-| `MaintenanceStoreInterface` | Always. Cursor-based inventory and idempotent object deletion, for `gc` / `verify` / `stat` |
+| `MaintenanceStoreInterface` | Always. Cursor-based inventory with timestamps, idempotent object deletion and a quarantine, for `gc` / `verify` / `stat` |
 | `StoreUrlProviderInterface` | Always implemented, **nullable in result**. A public or presigned URL when the adapter can mint one, `null` when it cannot |
 | `RangeReadableStoreInterface` | **Never** — see below |
 | `ContentAddressableStoreInterface` | Only via `FlysystemContentAddressableStore`, and only with an explicit `AdapterSemantics` |
@@ -86,6 +89,38 @@ reading and discarding a prefix would advertise cheap seeking and deliver a full
 download. Where an adapter *does* return a seekable stream,
 `rasuvaeff/yii3-filestorage-web` detects that and serves the range anyway; where
 it does not, a full `200` is correct. Presigned S3 URLs handle ranges in S3.
+
+## Layout and garbage collection
+
+```php
+use Rasuvaeff\Yii3Filestorage\Store\Layout\FlatSiblingLayout;
+
+$store = new FlysystemStore(
+    name: 'flysystem',
+    filesystem: $filesystem,
+    streamFactory: $streamFactory,
+    quarantinePrefix: '.quarantine',
+    layout: new FlatSiblingLayout(), // default: DirectoryLayout
+);
+```
+
+| Piece | Behaviour |
+|---|---|
+| `layout()` | `DirectoryLayout` unless configured. Chosen once per store: switching it on existing data orphans every derivative |
+| `delete(File)` | `DirectoryLayout`: the key directory prefix, derivatives included. `FlatSiblingLayout`: `<base>.<ext>` and `<base>-*` in the same directory, found with one shallow listing |
+| `objects()` | `StoredObject` with `lastModified` and `size` from the listing itself (S3 `ListObjectsV2`), no request per object. An adapter that omits the timestamp yields null, and `gc` never sweeps such an object. The quarantine prefix is never listed |
+| `quarantine()` | `move()` to `<prefix>/<token>/<path>` with private visibility — Flysystem's S3 copy would otherwise carry a public ACL into the quarantine |
+| `restore()` | Put-if-absent per object: a key re-published meanwhile is kept. A `fileExists()` then `move()`, and on S3 a move is a copy plus a delete: **not atomic**. Correct for what `gc` restores — content-addressed keys, where a racing writer published the same bytes. A restored object gets the filesystem's default visibility, like a fresh write |
+| `purge()` / `quarantined()` | Delete an entry; list entries in token (time) order |
+| `quarantineProblem()` | A message when no prefix is configured — `gc` then refuses to delete from the store |
+
+**The quarantine prefix.** A path whose first segment starts with `.` or `_`
+(`.quarantine`, `_trash/gc`). Group and scope names start with a letter or digit,
+so no generated key can fall inside the prefix or contain it; `write()` and
+`putIfAbsent()` refuse such a key anyway. It lives in the same bucket, because a
+move cannot cross filesystems — so on a public bucket, **exclude the prefix from
+the public read policy**. The store cannot inspect a bucket policy and does not
+claim to.
 
 ## Presigned URLs and delivery policy
 

@@ -15,7 +15,10 @@ use Rasuvaeff\Yii3Filestorage\File;
 use Rasuvaeff\Yii3Filestorage\Path\PathGeneratorInterface;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryOptions;
 use Rasuvaeff\Yii3Filestorage\Store\ContentAddressableStoreInterface;
+use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectLayoutInterface;
+use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectSet;
 use Rasuvaeff\Yii3Filestorage\Store\MaintenanceStoreInterface;
+use Rasuvaeff\Yii3Filestorage\Store\QuarantinedObject;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
 use Rasuvaeff\Yii3Filestorage\Store\StoreResult;
 use Rasuvaeff\Yii3Filestorage\Store\StoreUrlProviderInterface;
@@ -102,6 +105,12 @@ final readonly class FlysystemContentAddressableStore implements
     ): StoreResult {
         $path = $object->relativePath;
         $declared = $upload->size();
+
+        if ($this->store->isQuarantined($path)) {
+            throw new StoreException(
+                "Content-addressed key \"{$path}\" lies inside the quarantine of store \"{$this->name()}\"",
+            );
+        }
 
         if ($maxBytes > 0 && $declared !== null && $declared > $maxBytes) {
             throw new UploadTooLargeException(
@@ -193,6 +202,12 @@ final readonly class FlysystemContentAddressableStore implements
     }
 
     #[Override]
+    public function layout(): ObjectLayoutInterface
+    {
+        return $this->store->layout();
+    }
+
+    #[Override]
     public function delete(File $file): void
     {
         $this->store->delete($file);
@@ -246,5 +261,37 @@ final readonly class FlysystemContentAddressableStore implements
     public function deleteObject(StoredObjectId $object): void
     {
         $this->store->deleteObject($object);
+    }
+
+    #[Override]
+    public function quarantine(ObjectSet $objects, DateTimeImmutable $now): ?QuarantinedObject
+    {
+        return $this->store->quarantine($objects, $now);
+    }
+
+    #[Override]
+    public function restore(QuarantinedObject $entry): void
+    {
+        $this->store->restore($entry);
+    }
+
+    #[Override]
+    public function purge(QuarantinedObject $entry): void
+    {
+        $this->store->purge($entry);
+    }
+
+    #[Override]
+    public function quarantined(
+        ?string $afterToken = null,
+        int $limit = 1000,
+    ): iterable {
+        return $this->store->quarantined($afterToken, $limit);
+    }
+
+    #[Override]
+    public function quarantineProblem(): ?string
+    {
+        return $this->store->quarantineProblem();
     }
 }
