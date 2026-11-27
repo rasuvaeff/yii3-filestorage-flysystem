@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+Pre-1.0 minor (planned 0.5.0): requires `rasuvaeff/yii3-filestorage` `^0.10`, and fixes the pre-1.0 review (2026-11-27).
+
+- **Changed:** requires `rasuvaeff/yii3-filestorage` `^0.10`; this release does not install with core 0.9. Stay on 0.4.0 for 0.9.
+- **BC break:** `deleteObject()` is gone from `FlysystemStore` and `FlysystemContentAddressableStore` (core 0.10 removed it from `MaintenanceStoreInterface`). `objects()` yields core 0.10's `StoredObject` — read `$object->id->relativePath`.
+- **BC break:** a group's `maxBytes` is now core's `UploadSizeException` (was `UploadTooLargeException`) from `write()` and `putIfAbsent()`, before and after the write. Catch `SizeLimitExceededException` for both.
+- **BC break:** `orderedListing` moved from `AdapterSemantics` (constructor and `guaranteed()`) to `FlysystemStore(orderedListing: bool)` and the `orderedListing` param; `FlysystemStore` no longer takes `semantics`. A plain store can now declare a listing order without claiming deduplication guarantees (review #7).
+- **BC break:** `FlysystemContentAddressableStore(store, semantics)` — the `filesystem` argument is gone; the wrapped store's own operator is used, so writes and reads can no longer go to two different operators (review #16).
+- Fix: `objects()` and `quarantined()` re-listed the whole bucket (or every quarantine token) on every page — quadratic per `gc` pass (10,000 objects: 425,397 entries pulled without `orderedListing`, 232,971 with it). A page whose cursor is the previous page's last key now continues the same listing: one listing per pass (review #6, #8).
+- Fix: a wrongly declared `orderedListing` silently skipped objects (the probe saw 1,067 of 10,000). Every consecutive pair is now compared, and the first key out of `strcmp` order is a `StoreException` (review #7).
+- Fix: presigned S3 URLs served SVG/HTML `inline` from the bucket (review A5 / #2). With core 0.10 every `ActiveMediaTypes` type is `attachment`; `S3TemporaryUrlOptions(?ActiveMediaTypes $activeTypes)` applies the same rule with your list (`ActiveMediaTypes::withExtra([...])`) and strips CR/LF/NUL from the response type (#15). **Behaviour:** PDF is an active (plugin) type — a presigned PDF URL is now an attachment even for an `inline` group.
+- Fix: a flat key under `DirectoryLayout` deleted its whole fan-out directory on `delete()` (review A1 / #4). Core 0.10's layout now refuses such a path; `delete()` turns the refusal into a `StoreException` and deletes nothing. DI checks the bound `PathGeneratorInterface` against the layout at boot (`LayoutCompatibility::assertPaths`, `InvalidConfigException`).
+- Fix: `quarantine()` left already moved members in the quarantine when a later move failed; it now puts them back first (core 0.10 contract). A member that cannot go back is named in the exception and stays under the entry.
+- Enh: `objects()` never lists a path with a segment starting with `.` (`.keep`, `.well-known/`).
+- Enh: `write()` stores the detected media type as the object's S3 `ContentType` instead of letting Flysystem guess it again (#15).
+- Docs: listing order, the bucket belonging to the store, `filestorage:check` not seeing a public bucket, `putIfAbsent()` leaving an over-cap object to `gc`, the dedup recipe with `quarantinePrefix` and `orderedListing`; SeaweedFS replaces MinIO in README, examples and the Makefile default endpoint (`127.0.0.1:8333`) (#14).
+- Tests: integration cases for an SVG presigned URL, the stored `ContentType`, an ordered pass across `ListObjectsV2` pages, and the quarantine ACL (skipped on SeaweedFS, which reports no ACLs).
+
 ## 0.4.0 — 2026-11-27
 
 Pre-1.0 minor: requires `rasuvaeff/yii3-filestorage` `^0.9`, whose store contract changed.

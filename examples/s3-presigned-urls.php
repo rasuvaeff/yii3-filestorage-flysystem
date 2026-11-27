@@ -31,7 +31,7 @@ $client = new S3Client([
     'version' => 'latest',
     'region' => (string) (getenv('FILESTORAGE_S3_REGION') ?: 'us-east-1'),
     'endpoint' => $endpoint,
-    // MinIO addresses buckets as path segments, not as subdomains
+    // S3 gateways (SeaweedFS, MinIO) address buckets as path segments, not as subdomains
     'use_path_style_endpoint' => true,
     'credentials' => [
         'key' => (string) (getenv('FILESTORAGE_S3_KEY') ?: 'minioadmin'),
@@ -108,5 +108,5 @@ echo "first put created:  " . ($first->created ? 'yes' : 'no') . "\n";
 echo "second put created: " . ($second->created ? 'yes' : 'no') . " (reused, so the ledger adds a reference)\n";
 
 $store->delete($file);
-$dedup->deleteObject($key);
+$filesystem->delete($key->relativePath);
 echo "cleaned up\n";

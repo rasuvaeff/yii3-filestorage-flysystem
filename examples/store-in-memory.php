@@ -9,7 +9,6 @@ use Rasuvaeff\Yii3Filestorage\File;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryOptions;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicy;
-use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
 use Rasuvaeff\Yii3Filestorage\Upload;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore;
 
@@ -58,7 +57,7 @@ var_dump($store->temporaryUrl($file, new DateTimeImmutable('+1 hour'), DeliveryO
 // 4. Inventory, for maintenance commands. Paged and resumable by path.
 $filesystem->write('documents/other/original.txt', 'unrelated');
 foreach ($store->objects(limit: 10) as $object) {
-    echo "inventory  {$object->relativePath}\n";
+    echo "inventory  {$object->id->relativePath}\n";
 }
 
 // 5. Delete removes the file's whole directory — derivatives included, or a
@@ -71,5 +70,5 @@ echo "after delete, thumbnail gone: "
     . ($filesystem->fileExists(dirname($result->relativePath) . '/thumb.webp') ? 'no' : 'yes') . "\n";
 
 // The unrelated object is untouched.
-$store->deleteObject(new StoredObjectId('documents/other/original.txt'));
-echo "unrelated object removed on request\n";
+echo "unrelated object kept:        "
+    . ($filesystem->fileExists('documents/other/original.txt') ? 'yes' : 'no') . "\n";
