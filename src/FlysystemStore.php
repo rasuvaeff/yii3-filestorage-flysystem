@@ -591,7 +591,9 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
         try {
             $tokens = [];
             foreach ($this->filesystem->listContents($quarantine, false) as $attributes) {
-                $token = substr(rtrim($attributes->path(), '/'), \strlen($quarantine) + 1);
+                // DirectoryAttributes trims slashes itself, so an adapter that
+                // reports `prefix/token/` still yields the bare token.
+                $token = substr($attributes->path(), \strlen($quarantine) + 1);
                 if (
                     $attributes->isDir()
                     && QuarantinedObject::isToken($token)

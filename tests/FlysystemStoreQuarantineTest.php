@@ -347,7 +347,8 @@ final class FlysystemStoreQuarantineTest
     /**
      * Some adapters report a directory with its trailing slash. The token is
      * the name without it — otherwise no entry is ever found again, and
-     * nothing is restored or purged.
+     * nothing is restored or purged. An emptied entry is skipped, not the end
+     * of the listing.
      */
     public function anEntryListedWithATrailingSlashIsStillFound(): void
     {

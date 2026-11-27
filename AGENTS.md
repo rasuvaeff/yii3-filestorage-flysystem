@@ -89,15 +89,18 @@ nothing was tested. Check the word before believing the colour.
 
 `minMsi` is **88**. `composer mutation` runs Infection with `--with-uncovered`
 (code the tests execute but do not name in `#[Covers]` is mutated too), so the
-number is the overall MSI: 236 of 245 counted mutants killed (about 96%), with
+number is the overall MSI: 409 of 418 counted mutants killed (about 98%, CI
+2026-11-27), with
 the template's signature-default ignore and Public/ProtectedVisibility off. The
-12 ignored mutants are `type $name = default,` signature lines; the signatures
-that carry them (`objects()`, `putIfAbsent()`, `guaranteed()`) are written one
+16 ignored mutants are `type $name = default,` signature lines; the signatures
+that carry them (`objects()`, `quarantined()`, `putIfAbsent()`, `guaranteed()`) are written one
 parameter per line so the ignore applies. Every fault the store distinguishes
 has a test that breaks it that specific way: missing vs. unreachable vs.
 present-but-unreadable, a declared size trusted over a re-measurement, the
-reuse cap's own boundary distinct from the pre-write one, and a pre-write
-refusal that never touches the filesystem. The survivors are the groups below:
+reuse cap's own boundary distinct from the pre-write one, a pre-write
+refusal that never touches the filesystem, and — for the quarantine — a
+vanished member vs. a failed move vs. an unreachable probe, a restore that
+skips only the re-published member, and the exact depth of every listing. The survivors are the groups below:
 
 | Group | Example | Why no test kills it |
 |---|---|---|
