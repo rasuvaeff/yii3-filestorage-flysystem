@@ -23,7 +23,7 @@ against it.
 ## Requirements
 
 - PHP 8.3 – 8.6
-- `league/flysystem` ^3.29 (v2 is not supported)
+- `league/flysystem` ^3.35.3 (v2 is not supported)
 - `rasuvaeff/yii3-filestorage` ^0.1
 - A PSR-17 implementation, and a Flysystem adapter of your choice
 

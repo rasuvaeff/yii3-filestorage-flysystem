@@ -1,7 +1,7 @@
 # rasuvaeff/yii3-filestorage-flysystem
 
 Flysystem object store for `rasuvaeff/yii3-filestorage`. Namespace
-`Rasuvaeff\Yii3FilestorageFlysystem\`. PHP 8.3–8.6, `league/flysystem` ^3.29.
+`Rasuvaeff\Yii3FilestorageFlysystem\`. PHP 8.3–8.6, `league/flysystem` ^3.35.3.
 
 ## Install
 
