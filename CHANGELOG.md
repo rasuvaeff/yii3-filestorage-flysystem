@@ -20,7 +20,7 @@ Pre-1.0 minor (planned 0.5.0): requires `rasuvaeff/yii3-filestorage` `^0.10`, an
 - Fix: a flat key under `DirectoryLayout` deleted its whole fan-out directory on `delete()` (review A1 / #4). Core 0.10's layout now refuses such a path; `delete()` turns the refusal into a `StoreException` and deletes nothing. DI checks the bound `PathGeneratorInterface` against the layout at boot (`LayoutCompatibility::assertPaths`, `InvalidConfigException`).
 - Fix: `quarantine()` left already moved members in the quarantine when a later move failed; it now puts them back first (core 0.10 contract). A member that cannot go back is named in the exception and stays under the entry.
 - Enh: `objects()` never lists a path with a segment starting with `.` (`.keep`, `.well-known/`).
-- Enh: `write()` stores the detected media type as the object's S3 `ContentType` instead of letting Flysystem guess it again (#15).
+- Enh: `write()` stores the detected media type as the object's S3 `ContentType` instead of letting Flysystem guess it again (#15) — except a scriptable type (`ActiveMediaTypes::scriptable()`), which core keys `.bin` and which stays typed by that key (`application/octet-stream`), so a public bucket never serves it inline.
 - Docs: listing order, the bucket belonging to the store, `filestorage:check` not seeing a public bucket, `putIfAbsent()` leaving an over-cap object to `gc`, the dedup recipe with `quarantinePrefix` and `orderedListing`; SeaweedFS replaces MinIO in README, examples and the Makefile default endpoint (`127.0.0.1:8333`) (#14).
 - Tests: integration cases for an SVG presigned URL, the stored `ContentType`, an ordered pass across `ListObjectsV2` pages, and the quarantine ACL (skipped on SeaweedFS, which reports no ACLs).
 

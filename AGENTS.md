@@ -186,7 +186,10 @@ unassigned variable, which is also null.
 - **Active content is `attachment` on a presigned URL.** `S3TemporaryUrlOptions`
   repeats core's `DeliveryOptions` rule with its own `ActiveMediaTypes` (extras
   configurable) and strips CR/LF/NUL from the response type. `write()` passes
-  the detected type as S3 `ContentType`; `putIfAbsent()` has no media type.
+  the detected type as S3 `ContentType` — never a scriptable one: core keys
+  those `.bin` so a public bucket serves them as octet-stream, and storing
+  `image/svg+xml` would undo that (core review 1.0 B5). `putIfAbsent()` has no
+  media type.
 - **`objects()` takes `lastModified` / `size` from the listing.** Null stays
   null — the core sweep never deletes an undated object. Do not add a
   per-object `lastModified()` request, and never substitute "now" or 0.

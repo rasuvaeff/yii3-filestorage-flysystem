@@ -418,6 +418,24 @@ final class MinioIntegrationTest
     }
 
     /**
+     * Core keys an SVG `.bin`, so a public bucket serves it as a download;
+     * storing the detected `image/svg+xml` as Content-Type would serve it
+     * inline by path again (core review 1.0 B5).
+     */
+    public function aScriptableTypeIsNotStoredAsItsOwnContentType(): void
+    {
+        $store = $this->requireStore();
+        $filesystem = $this->requireFilesystem();
+
+        $result = $store->write(Fixtures::upload('<svg/>'), 'common', new RandomPathGenerator(), 'image/svg+xml');
+
+        Assert::string($result->relativePath)->endsWith('.bin');
+        Assert::same($filesystem->mimeType($result->relativePath), 'application/octet-stream');
+
+        $store->delete(Fixtures::file(relativePath: $result->relativePath, storeName: 'minio'));
+    }
+
+    /**
      * More keys than one ListObjectsV2 page (1000), paged the way gc does
      * with orderedListing declared: the gateway's key order is verified pair
      * by pair across its own page boundary, and nothing is lost or repeated

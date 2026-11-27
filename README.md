@@ -199,7 +199,10 @@ TemporaryUrlOptionsInterface::class => static fn (): TemporaryUrlOptionsInterfac
 
 CR, LF and NUL are stripped from the response type. `write()` also stores the
 detected media type as the object's `ContentType`, which is what a public URL
-serves; `putIfAbsent()` takes no media type and leaves it to the adapter.
+serves — except a scriptable type (HTML, SVG, XML, script): core gives those
+the inert `.bin` key, and the object keeps the type of that key,
+`application/octet-stream`, so a public bucket serves it as a download.
+`putIfAbsent()` takes no media type and leaves it to the adapter.
 
 **A public bucket is invisible to `filestorage:check`.** The check treats only
 core's `PublicFileSystemStore` as public; `publicUrl()` answering is no

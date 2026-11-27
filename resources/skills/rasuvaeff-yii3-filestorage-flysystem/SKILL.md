@@ -82,6 +82,8 @@ results. Namespace `Rasuvaeff\Yii3FilestorageFlysystem\`. Full API reference:
   so do not fill it with "now" or 0. It never lists a path with a `.`-segment.
 - `FlysystemContentAddressableStore(store, semantics)` uses the wrapped store's
   operator; `orderedListing` belongs to `FlysystemStore`, not `AdapterSemantics`.
+- `write()` stores the detected type as `ContentType`, but never a scriptable
+  one (SVG, HTML, …): those keep the type of their inert `.bin` key.
 - A group's byte cap is core's `UploadSizeException`
   (`SizeLimitExceededException`), both before and after the write.
 - `StreamWrapper::stream_close()` intentionally leaves the upload's stream open;

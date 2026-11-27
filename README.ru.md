@@ -198,8 +198,11 @@ TemporaryUrlOptionsInterface::class => static fn (): TemporaryUrlOptionsInterfac
 ```
 
 CR, LF и NUL из типа ответа вырезаются. `write()` также сохраняет определённый
-media type как `ContentType` объекта — его и отдаёт публичный URL;
-`putIfAbsent()` media type не принимает и оставляет тип адаптеру.
+media type как `ContentType` объекта — его и отдаёт публичный URL, — кроме
+скриптуемых типов (HTML, SVG, XML, скрипты): ядро даёт им инертный ключ `.bin`,
+и объект сохраняет тип этого ключа, `application/octet-stream`, так что
+публичный бакет отдаёт его на скачивание. `putIfAbsent()` media type не
+принимает и оставляет тип адаптеру.
 
 **Публичный бакет `filestorage:check` не видит.** Публичным проверка считает
 только `PublicFileSystemStore` ядра; ответ `publicUrl()` доказательством не

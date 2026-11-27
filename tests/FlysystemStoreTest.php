@@ -579,11 +579,23 @@ final class FlysystemStoreTest
      * The detected media type is what the object is stored with — on S3 the
      * `ContentType` a public URL serves — rather than Flysystem guessing again
      * from the extension or the bytes (review 1.0 #15). Header-unsafe bytes
-     * never reach it, and an unknown type leaves the adapter's default.
+     * never reach it, and an unknown type leaves the adapter's default. A
+     * scriptable type is never stored as itself: core keys it `.bin` so a
+     * public bucket serves it as a download (core review 1.0 B5).
      */
     public function theDetectedMediaTypeIsStoredWithTheObject(): void
     {
-        foreach ([['image/png', ['ContentType' => 'image/png']], ["text/pl\r\nain", ['ContentType' => 'text/plain']], [null, []], ["\n", []]] as [$type, $expected]) {
+        $cases = [
+            ['image/png', ['ContentType' => 'image/png']],
+            ["text/pl\r\nain", ['ContentType' => 'text/plain']],
+            ['application/pdf', ['ContentType' => 'application/pdf']],
+            [null, []],
+            ["\n", []],
+            // scriptable: left to the key's inert `.bin`, never stored as itself
+            ['image/svg+xml', []],
+            ['Text/HTML; charset=utf-8', []],
+        ];
+        foreach ($cases as [$type, $expected]) {
             $configs = [];
             $filesystem = Understudy::strict(Understudy::for(FilesystemOperator::class));
             when(fn() => $filesystem->fileExists(Arg::any()))->returns(false);

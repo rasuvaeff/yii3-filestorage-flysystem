@@ -19,6 +19,7 @@ use Psr\Http\Message\StreamInterface;
 use Rasuvaeff\Yii3Filestorage\Exception\StoreException;
 use Rasuvaeff\Yii3Filestorage\Exception\UploadSizeException;
 use Rasuvaeff\Yii3Filestorage\File;
+use Rasuvaeff\Yii3Filestorage\Mime\ActiveMediaTypes;
 use Rasuvaeff\Yii3Filestorage\Path\PathGeneratorInterface;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryOptions;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\DirectoryLayout;
@@ -902,13 +903,24 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
      * Flysystem guessing again by extension or content — it is what a public
      * URL serves (review 1.0 #15).
      *
+     * Except for a scriptable type ({@see ActiveMediaTypes::scriptable()}):
+     * core's `ExtensionMap` gives those the inert `.bin` key precisely so a
+     * public bucket serves them as `application/octet-stream`, and storing
+     * `image/svg+xml` would put the stored XSS back by path. Those are left to
+     * the adapter, which types them by the key's extension — `.bin`, or the
+     * extension an application deliberately mapped back.
+     *
      * @return array<string, string>
      */
     private function writeConfig(?string $mediaType): array
     {
         $mediaType = $mediaType === null ? '' : str_replace(["\r", "\n", "\0"], '', $mediaType);
 
-        return $mediaType === '' ? [] : ['ContentType' => $mediaType];
+        if ($mediaType === '' || ActiveMediaTypes::scriptable()->contains($mediaType)) {
+            return [];
+        }
+
+        return ['ContentType' => $mediaType];
     }
 
     /**

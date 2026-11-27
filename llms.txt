@@ -70,7 +70,7 @@ new FlysystemStore(
 
 | Method | Notes |
 |---|---|
-| `write(Upload, string $group, PathGeneratorInterface, ?string $mediaType, int $maxBytes)` | `StoreException` on a path collision — never silent sharing. `UploadSizeException` (a `SizeLimitExceededException`) before the write for a known-oversized body, after it for one that under-reported (object removed). Stores `$mediaType` as the object's `ContentType` |
+| `write(Upload, string $group, PathGeneratorInterface, ?string $mediaType, int $maxBytes)` | `StoreException` on a path collision — never silent sharing. `UploadSizeException` (a `SizeLimitExceededException`) before the write for a known-oversized body, after it for one that under-reported (object removed). Stores `$mediaType` as the object's `ContentType`, except a scriptable type (left to its `.bin` key: octet-stream) |
 | `layout()` | The configured `ObjectLayoutInterface` (`DirectoryLayout` by default) |
 | `delete(File)` | Deletes what `layout()->deletion()` names: the key directory prefix (`DirectoryLayout`) or `<base>.<ext>` + `<base>-*` siblings (`FlatSiblingLayout`) — derivatives included. A path the layout refuses → `StoreException`, nothing deleted |
 | `exists()` / `size()` / `lastModified()` / `stream()` | `null` / `false` on a missing object, never an exception |
