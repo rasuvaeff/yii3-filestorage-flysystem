@@ -33,11 +33,13 @@ results. Namespace `Rasuvaeff\Yii3FilestorageFlysystem\`. Full API reference:
    enforces the headers itself.
 
 4. **Deduplication requires both `AdapterSemantics` flags and has no default.**
-   Never probe with `fileExists()` then `write()` — that is the exact race that
-   hands a second writer a half-uploaded object.
+   Without atomic visibility, `fileExists()` then `write()` is the exact race
+   that hands a second writer a half-uploaded object.
 
-5. **`putIfAbsent()` verifies length before reuse and never overwrites.** The
-   key is the hash of the content; a mismatch means a foreign writer.
+5. **`putIfAbsent()` verifies length before reuse and never overwrites with
+   different bytes.** The key is the hash of the content; a mismatch means a
+   foreign writer. Concurrent writers may both publish the same bytes and both
+   get `created: true` — the flag is advisory, so never delete on its basis.
 
 6. **Do not turn the byte cap into a mid-write counter.** A remote PUT has no
    abort: check before, verify after, remove on violation (for a unique

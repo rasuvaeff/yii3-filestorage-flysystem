@@ -7,13 +7,14 @@ namespace Rasuvaeff\Yii3FilestorageFlysystem\Tests\Integration;
 use Aws\S3\S3Client;
 use DateTimeImmutable;
 use League\Flysystem\AwsS3V3\AwsS3V3Adapter;
-use League\Flysystem\Filesystem;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
+use Rasuvaeff\Yii3Filestorage\Store\StoreResult;
 use Rasuvaeff\Yii3FilestorageFlysystem\AdapterSemantics;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemContentAddressableStore;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\Fixtures;
+use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\RacingFilesystem;
 use Rasuvaeff\Yii3FilestorageFlysystem\Url\S3TemporaryUrlOptions;
 use Testo\Assert;
 use Testo\Codecov\CoversNothing;
@@ -48,7 +49,7 @@ final class MinioIntegrationTest
 {
     private const string KEY = 'sha/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/original';
 
-    private ?Filesystem $filesystem = null;
+    private ?RacingFilesystem $filesystem = null;
     private ?FlysystemStore $store = null;
 
     #[BeforeTest]
@@ -76,7 +77,7 @@ final class MinioIntegrationTest
             $client->createBucket(['Bucket' => $bucket]);
         }
 
-        $this->filesystem = new Filesystem(new AwsS3V3Adapter($client, $bucket));
+        $this->filesystem = new RacingFilesystem(new AwsS3V3Adapter($client, $bucket));
         $this->store = new FlysystemStore(
             name: 'minio',
             filesystem: $this->filesystem,
@@ -147,14 +148,39 @@ final class MinioIntegrationTest
     }
 
     /**
+     * A presigned URL is only useful for media if the server honours `Range`:
+     * that is how a player seeks and how a download resumes. This store has no
+     * range primitive of its own, so the bucket is the one serving it.
+     */
+    public function aPresignedUrlServesARangeRequest(): void
+    {
+        $store = $this->requireStore();
+
+        $result = $store->write(Fixtures::upload('hello'), 'common', new RandomPathGenerator());
+        $file = Fixtures::file(relativePath: $result->relativePath, storeName: 'minio');
+
+        $url = $store->temporaryUrl($file, new DateTimeImmutable('+10 minutes'), Fixtures::deliveryOptions());
+        Assert::true($url !== null);
+
+        $context = stream_context_create(['http' => ['ignore_errors' => true, 'header' => "Range: bytes=1-3\r\n"]]);
+        $body = file_get_contents($url, use_include_path: false, context: $context);
+        $headers = $http_response_header ?? [];
+
+        Assert::same($body, 'ell');
+        Assert::string($headers[0] ?? '')->contains('206');
+        Assert::string(strtolower(implode("\n", $headers)))->contains('content-range: bytes 1-3/5');
+
+        $store->delete($file);
+    }
+
+    /**
      * Two writers, identical content, one object — and the second is told it
-     * reused rather than created, which is what lets the ledger record a
-     * reference instead of a second blob.
+     * reused rather than created.
      */
     public function contentAddressedWritesConvergeOnOneObject(): void
     {
         $flysystemStore = $this->requireStore();
-        if (!$this->filesystem instanceof Filesystem) {
+        if (!$this->filesystem instanceof RacingFilesystem) {
             throw new SkipTest('MinIO endpoint not configured (FILESTORAGE_S3_ENDPOINT)');
         }
 
@@ -171,6 +197,44 @@ final class MinioIntegrationTest
         Assert::true($first->created);
         Assert::false($second->created);
         Assert::same($second->size, 5);
+
+        $store->deleteObject($object);
+    }
+
+    /**
+     * Two real PUTs to one key: the second writer publishes while the first is
+     * between its existence check and its write. Both report `created` — the
+     * flag is advisory — and the object is the one whole body both uploaded.
+     */
+    public function concurrentContentAddressedWritesLeaveOneWholeObject(): void
+    {
+        $flysystemStore = $this->requireStore();
+        $filesystem = $this->filesystem;
+        if (!$filesystem instanceof RacingFilesystem) {
+            throw new SkipTest('MinIO endpoint not configured (FILESTORAGE_S3_ENDPOINT)');
+        }
+
+        $store = new FlysystemContentAddressableStore(
+            store: $flysystemStore,
+            filesystem: $filesystem,
+            semantics: AdapterSemantics::guaranteed(),
+        );
+        $object = new StoredObjectId(self::KEY);
+        $store->deleteObject($object);
+
+        $second = null;
+        $filesystem->raceOnNextExistenceCheck(static function () use ($store, $object, &$second): void {
+            $second = $store->putIfAbsent(Fixtures::upload('hello'), $object);
+        });
+
+        $first = $store->putIfAbsent(Fixtures::upload('hello'), $object);
+
+        Assert::instanceOf($second, StoreResult::class);
+        Assert::true($first->created);
+        Assert::true($second->created);
+        Assert::same($first->size, 5);
+        Assert::same($second->size, 5);
+        Assert::same($filesystem->read(self::KEY), 'hello');
 
         $store->deleteObject($object);
     }

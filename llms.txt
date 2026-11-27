@@ -27,7 +27,8 @@ Binds `StoreInterface` only. Does NOT bind `StorageInterface` (core's),
    cannot carry the delivery policy would serve uploaded HTML inline from your
    bucket; returning null sends the caller to the proxy route instead.
 5. **Deduplication needs `AdapterSemantics`, and both flags must be true.**
-   Never probe with `fileExists()` + `write()` — that is the race.
+   Without atomic visibility, `fileExists()` + `write()` is the race that
+   hands a second writer a half-uploaded object.
 6. **Byte caps are checked before the write and verified after it.** A remote
    PUT has no abort.
 
@@ -70,12 +71,16 @@ new FlysystemContentAddressableStore(
 );
 
 $result = $store->putIfAbsent($upload, $storedObjectId, $maxBytes);
-// created: true  → bytes published
+// created: true  → bytes published (advisory: concurrent writers may all get true)
 // created: false → bytes were already there, length verified
 ```
 
 A stored length that disagrees with the upload is a `StoreException`: the key is
 the hash, so a mismatch means something else wrote that key.
+The contract is atomic publication of identical content, not a single creator:
+two writers that both see the key absent both upload the same bytes and both
+get `created: true`. Never delete bytes on the basis of `created` — the ledger's
+reservations and references own that.
 `semantics()` returns the declaration, for diagnostics.
 
 ### `AdapterSemantics`

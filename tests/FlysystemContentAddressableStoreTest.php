@@ -7,6 +7,7 @@ namespace Rasuvaeff\Yii3FilestorageFlysystem\Tests;
 use DateTimeImmutable;
 use League\Flysystem\Filesystem;
 use League\Flysystem\FilesystemOperator;
+use League\Flysystem\InMemory\InMemoryFilesystemAdapter;
 use League\Flysystem\UnableToWriteFile;
 use Rasuvaeff\Understudy\Arg;
 use Rasuvaeff\Understudy\Understudy;
@@ -15,12 +16,14 @@ use Rasuvaeff\Yii3Filestorage\Exception\UploadTooLargeException;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Store\ContentAddressableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
+use Rasuvaeff\Yii3Filestorage\Store\StoreResult;
 use Rasuvaeff\Yii3Filestorage\Upload;
 use Rasuvaeff\Yii3FilestorageFlysystem\AdapterSemantics;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemContentAddressableStore;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\FixedSizeStream;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\Fixtures;
+use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\RacingFilesystem;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\StallingStream;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\UnsizedStream;
 use Testo\Assert;
@@ -69,8 +72,8 @@ final class FlysystemContentAddressableStoreTest
 
     /**
      * The point of the whole exercise: the second writer of identical content
-     * does not write, and says so, so the ledger records a reference instead of
-     * a new object.
+     * does not write, and says so. The flag is informational: the ledger counts
+     * references by reservation, not by who created the object.
      */
     public function aSecondPutReusesThemAndSaysSo(): void
     {
@@ -80,6 +83,45 @@ final class FlysystemContentAddressableStoreTest
 
         Assert::false($result->created);
         Assert::same($result->size, 5);
+    }
+
+    /**
+     * Two writers that both see the key absent both publish, and both report
+     * `created`. The flag is advisory, and this pins down what the contract
+     * actually is: identical bytes, published whole, at one key, with nothing
+     * lost to the second PUT. A caller that deleted on `created` would remove
+     * bytes the other writer has already committed against, which is why none
+     * does.
+     */
+    public function concurrentWritersBothPublishTheSameBytesAndBothReportCreated(): void
+    {
+        $filesystem = new RacingFilesystem(new InMemoryFilesystemAdapter());
+        $store = new FlysystemContentAddressableStore(
+            store: new FlysystemStore('flysystem', $filesystem, Fixtures::factory()),
+            filesystem: $filesystem,
+            semantics: AdapterSemantics::guaranteed(),
+        );
+        $object = new StoredObjectId(self::KEY);
+
+        $second = null;
+        $filesystem->raceOnNextExistenceCheck(static function () use ($store, $object, &$second): void {
+            $second = $store->putIfAbsent(Fixtures::upload('hello'), $object);
+        });
+
+        $first = $store->putIfAbsent(Fixtures::upload('hello'), $object);
+
+        Assert::instanceOf($second, StoreResult::class);
+        Assert::true($first->created);
+        Assert::true($second->created);
+        Assert::same($first->relativePath, self::KEY);
+        Assert::same($second->relativePath, self::KEY);
+        Assert::same($first->size, 5);
+        Assert::same($second->size, 5);
+        Assert::same($filesystem->read(self::KEY), 'hello');
+
+        $third = $store->putIfAbsent(Fixtures::upload('hello'), $object);
+        Assert::false($third->created);
+        Assert::same($third->size, 5);
     }
 
     /**
