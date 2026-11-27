@@ -49,11 +49,18 @@ final readonly class FlysystemContentAddressableStore implements
 {
     private const int MEASURE_CHUNK = 262_144;
 
+    private FilesystemOperator $filesystem;
+
+    /**
+     * The operator is the wrapped store's own: a second one could differ, and
+     * writes would land where reads and deletes never look (review 1.0 #16).
+     */
     public function __construct(
         private FlysystemStore $store,
-        private FilesystemOperator $filesystem,
         private AdapterSemantics $semantics,
-    ) {}
+    ) {
+        $this->filesystem = $store->filesystem();
+    }
 
     /**
      * Counts an upload that does not report its own length.

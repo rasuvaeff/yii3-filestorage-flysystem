@@ -482,10 +482,11 @@ final class FlysystemStoreQuarantineTest
     }
 
     /**
-     * A move that failed with the object still there stops the entry. What
-     * moved before it stays in the quarantine, findable by the next run.
+     * A move that failed with the object still there puts back what moved
+     * before it (core 0.10 contract, review 1.0 B8): a half-quarantined set
+     * whose row stays would have the moved half purged by the retention.
      */
-    public function aFailedMoveStopsTheEntryAndKeepsWhatMoved(): void
+    public function aFailedMovePutsBackWhatAlreadyMoved(): void
     {
         $this->filesystem->write('g/key/a.txt', 'a');
         $this->filesystem->write('g/key/b.txt', 'b');
@@ -498,19 +499,83 @@ final class FlysystemStoreQuarantineTest
 
         $this->assertStoreFailure(
             fn() => $this->quarantineKey(),
-            'Could not quarantine "g/key/b.txt" in store "flysystem"',
+            'Could not quarantine "g/key/b.txt" in store "flysystem"; nothing was moved',
+            $cause,
+        );
+
+        Assert::same($this->filesystem->read('g/key/a.txt'), 'a');
+        Assert::same($this->filesystem->read('g/key/b.txt'), 'b');
+        Assert::same(iterator_to_array($this->store->quarantined(), preserve_keys: false), []);
+        Assert::same(iterator_to_array($this->filesystem->listContents(self::PREFIX, deep: true), preserve_keys: false), []);
+        Assert::same($this->inventory(), ['g/key/a.txt', 'g/key/b.txt']);
+    }
+
+    /**
+     * A member that cannot go back — its move back fails, or its key was
+     * re-published meanwhile — stays under the entry, named in the message,
+     * where the next gc run finds it.
+     */
+    public function aMemberThatCannotGoBackStaysInTheQuarantine(): void
+    {
+        $this->filesystem->write('g/key/a.txt', 'a');
+        $this->filesystem->write('g/key/b.txt', 'b');
+        $this->filesystem->write('g/key/c.txt', 'c');
+        $cause = UnableToMoveFile::fromLocationTo('g/key/c.txt', 'elsewhere');
+        $filesystem = $this->filesystem;
+        $this->filesystem->on('move', static function (string $source) use ($cause, $filesystem): void {
+            if ($source === 'g/key/c.txt') {
+                // a writer re-publishes a while c fails, and b cannot move back
+                $filesystem->write('g/key/a.txt', 'again');
+                $filesystem->on('move', static function (string $source): void {
+                    if (str_ends_with($source, '/g/key/b.txt')) {
+                        throw UnableToMoveFile::fromLocationTo($source, 'g/key/b.txt');
+                    }
+                });
+
+                throw $cause;
+            }
+        });
+
+        $this->assertStoreFailure(
+            fn() => $this->quarantineKey(),
+            'Could not quarantine "g/key/c.txt" in store "flysystem"; left in the quarantine, restored by gc while '
+            . 'a row references them: g/key/a.txt, g/key/b.txt',
             $cause,
         );
 
         $listed = iterator_to_array($this->store->quarantined(), preserve_keys: false);
-        Assert::same($this->ids($listed[0]->objects), ['g/key/a.txt']);
-        Assert::true($this->filesystem->fileExists('g/key/b.txt'));
+        Assert::same($this->ids($listed[0]->objects), ['g/key/a.txt', 'g/key/b.txt']);
+        Assert::same($this->filesystem->read('g/key/a.txt'), 'again');
+        Assert::same($this->filesystem->read('g/key/c.txt'), 'c');
     }
 
     /**
-     * A probe that fails after a failed move is an unreachable store, not a
-     * vanished object.
+     * Put back with the filesystem's default visibility, like restore(), not
+     * the private one the quarantine gave it.
      */
+    public function aMemberPutBackDoesNotKeepTheQuarantineVisibility(): void
+    {
+        $this->filesystem = new FaultyFilesystem(
+            new InMemoryFilesystemAdapter(),
+            [Config::OPTION_VISIBILITY => Visibility::PUBLIC],
+        );
+        $this->store = $this->store();
+        $this->filesystem->write('g/key/a.txt', 'a');
+        $this->filesystem->write('g/key/b.txt', 'b');
+        $this->filesystem->on('move', static function (string $source): void {
+            if ($source === 'g/key/b.txt') {
+                throw UnableToMoveFile::fromLocationTo($source, 'elsewhere');
+            }
+        });
+
+        try {
+            $this->quarantineKey();
+        } catch (StoreException) {
+        }
+
+        Assert::same($this->filesystem->visibility('g/key/a.txt'), Visibility::PUBLIC);
+    }
+
     public function anUnreachableStoreAfterAFailedMoveIsAFailure(): void
     {
         $this->filesystem->write('g/key/a.txt', 'a');
@@ -527,7 +592,7 @@ final class FlysystemStoreQuarantineTest
 
         $this->assertStoreFailure(
             fn() => $this->quarantineKey(),
-            'Could not quarantine "g/key/a.txt" in store "flysystem"',
+            'Could not quarantine "g/key/a.txt" in store "flysystem"; nothing was moved',
             $cause,
         );
     }

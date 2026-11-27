@@ -85,7 +85,6 @@ final class MinioIntegrationTest
         $this->filesystem = new RacingFilesystem(new AwsS3V3Adapter($client, $bucket));
         $this->store = new FlysystemStore(
             name: 'minio',
-            filesystem: $this->filesystem,
             streamFactory: Fixtures::factory(),
             temporaryUrlOptions: new S3TemporaryUrlOptions(),
             quarantinePrefix: self::QUARANTINE,
@@ -192,7 +191,6 @@ final class MinioIntegrationTest
 
         $store = new FlysystemContentAddressableStore(
             store: $flysystemStore,
-            filesystem: $this->filesystem,
             semantics: AdapterSemantics::guaranteed(),
         );
         $object = new StoredObjectId(self::KEY);
@@ -222,7 +220,6 @@ final class MinioIntegrationTest
 
         $store = new FlysystemContentAddressableStore(
             store: $flysystemStore,
-            filesystem: $filesystem,
             semantics: AdapterSemantics::guaranteed(),
         );
         $object = new StoredObjectId(self::KEY);
@@ -346,7 +343,6 @@ final class MinioIntegrationTest
         }
         $store = new FlysystemStore(
             name: 'minio',
-            filesystem: $filesystem,
             streamFactory: Fixtures::factory(),
             layout: new FlatSiblingLayout(),
         );

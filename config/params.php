@@ -14,5 +14,10 @@ return [
         // may expose. Null leaves the store without one, and gc then refuses
         // to delete from it (filestorage:check warns).
         'quarantinePrefix' => null,
+        // Whether the adapter lists paths in strcmp order: true for S3 and
+        // S3-compatible services, GCS and Azure. The inventory is then
+        // streamed instead of sorted once per gc pass; a wrong true is caught
+        // on the first out-of-order key (StoreException), never a short pass.
+        'orderedListing' => false,
     ],
 ];

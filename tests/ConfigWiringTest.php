@@ -7,6 +7,8 @@ namespace Rasuvaeff\Yii3FilestorageFlysystem\Tests;
 use League\Flysystem\FilesystemOperator;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Psr\Http\Message\StreamFactoryInterface;
+use Rasuvaeff\Yii3Filestorage\Exception\InvalidConfigException;
+use Rasuvaeff\Yii3Filestorage\Path\PathGeneratorInterface;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Repository\RepositoryInterface;
 use Rasuvaeff\Yii3Filestorage\StorageInterface;
@@ -16,11 +18,13 @@ use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectLayoutInterface;
 use Rasuvaeff\Yii3Filestorage\Store\StoreInterface;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\Fixtures;
+use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\FlatPathGenerator;
 use Rasuvaeff\Yii3FilestorageFlysystem\Url\S3TemporaryUrlOptions;
 use Rasuvaeff\Yii3FilestorageFlysystem\Url\TemporaryUrlOptionsInterface;
 use Testo\Assert;
 use Testo\Codecov\CoversNothing;
 use Testo\Test;
+use Yiisoft\Di\BuildingException;
 use Yiisoft\Di\Container;
 use Yiisoft\Di\ContainerConfig;
 
@@ -107,6 +111,65 @@ final class ConfigWiringTest
     }
 
     /**
+     * The review's A1 at boot: a path generator that emits flat keys under
+     * the default DirectoryLayout makes deleting one file delete its
+     * neighbours. The pair is checked when the store is built, not at the
+     * first deletion.
+     */
+    public function aPathGeneratorThatDoesNotFitTheLayoutIsRefusedAtBoot(): void
+    {
+        try {
+            $this->container([
+                PathGeneratorInterface::class => static fn(): PathGeneratorInterface => new FlatPathGenerator(),
+            ])->get(StoreInterface::class);
+            Assert::fail('a flat path generator under the directory layout should not boot');
+        } catch (BuildingException $e) {
+            $cause = $e->getPrevious();
+            Assert::instanceOf($cause, InvalidConfigException::class);
+            Assert::string($cause->getMessage())->contains('Store "flysystem"');
+            Assert::string($cause->getMessage())->contains(FlatPathGenerator::class);
+        }
+    }
+
+    public function theSameGeneratorUnderAFittingLayoutBoots(): void
+    {
+        $store = $this->container([
+            PathGeneratorInterface::class => static fn(): PathGeneratorInterface => new FlatPathGenerator(),
+            ObjectLayoutInterface::class => FlatSiblingLayout::class,
+        ])->get(StoreInterface::class);
+
+        Assert::instanceOf($store->layout(), FlatSiblingLayout::class);
+    }
+
+    public function theCoreDefaultGeneratorFitsTheDefaultLayout(): void
+    {
+        $store = $this->container([
+            PathGeneratorInterface::class => RandomPathGenerator::class,
+        ])->get(StoreInterface::class);
+
+        Assert::instanceOf($store->layout(), DirectoryLayout::class);
+    }
+
+    public function listingOrderIsNotAssumedByDefault(): void
+    {
+        $store = $this->container()->get(StoreInterface::class);
+
+        Assert::instanceOf($store, FlysystemStore::class);
+        Assert::false($store->orderedListing());
+    }
+
+    public function theOrderedListingParameterReachesTheStore(): void
+    {
+        $params = $this->params();
+        $params['rasuvaeff/yii3-filestorage-flysystem']['orderedListing'] = true;
+
+        $store = $this->container(params: $params)->get(StoreInterface::class);
+
+        Assert::instanceOf($store, FlysystemStore::class);
+        Assert::true($store->orderedListing());
+    }
+
+    /**
      * The one-source rule. Core binds the facade, `-db` the metadata half, this
      * package the physical store. Either side claiming another's key makes
      * installing both a `yiisoft/config` `Duplicate key` error.
@@ -141,6 +204,7 @@ final class ConfigWiringTest
         Assert::true(
             \array_key_exists('quarantinePrefix', $this->params()['rasuvaeff/yii3-filestorage-flysystem']),
         );
+        Assert::same($this->params()['rasuvaeff/yii3-filestorage-flysystem']['orderedListing'] ?? null, expected: false);
     }
 
     /**

@@ -10,7 +10,6 @@ use League\Flysystem\Config;
 use League\Flysystem\DirectoryListing;
 use League\Flysystem\Filesystem;
 use League\Flysystem\FilesystemOperator;
-use League\Flysystem\StorageAttributes;
 use League\Flysystem\UnableToCheckExistence;
 use League\Flysystem\UnableToDeleteDirectory;
 use League\Flysystem\UnableToDeleteFile;
@@ -31,10 +30,8 @@ use Rasuvaeff\Yii3Filestorage\Store\ContentAddressableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\MaintenanceStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\RangeReadableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObject;
-use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
 use Rasuvaeff\Yii3Filestorage\Store\StoreUrlProviderInterface;
 use Rasuvaeff\Yii3Filestorage\Upload;
-use Rasuvaeff\Yii3FilestorageFlysystem\AdapterSemantics;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\FixedPathGenerator;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\Fixtures;
@@ -579,39 +576,28 @@ final class FlysystemStoreTest
     }
 
     /**
-     * sortByPath() is toArray() + usort(), so it materialises and orders the
-     * whole bucket before the first yield — and gc calls objects() once per
-     * page. Declaring the adapter already ordered skips that sort, so the
-     * declared store's listing must match the adapter's raw order exactly,
-     * insertion order and all; the plain store still sorts it.
+     * The detected media type is what the object is stored with — on S3 the
+     * `ContentType` a public URL serves — rather than Flysystem guessing again
+     * from the extension or the bytes (review 1.0 #15). Header-unsafe bytes
+     * never reach it, and an unknown type leaves the adapter's default.
      */
-    public function anOrderedAdapterIsNotSortedAgain(): void
+    public function theDetectedMediaTypeIsStoredWithTheObject(): void
     {
-        foreach (['b/original.bin', 'a/original.bin', 'c/original.bin'] as $path) {
-            $this->filesystem->write($path, 'x');
+        foreach ([['image/png', ['ContentType' => 'image/png']], ["text/pl\r\nain", ['ContentType' => 'text/plain']], [null, []], ["\n", []]] as [$type, $expected]) {
+            $configs = [];
+            $filesystem = Understudy::strict(Understudy::for(FilesystemOperator::class));
+            when(fn() => $filesystem->fileExists(Arg::any()))->returns(false);
+            when(fn() => $filesystem->writeStream(Arg::any(), Arg::any(), Arg::any()))
+                ->answers(static function (Invocation $call) use (&$configs): void {
+                    $configs[] = $call->args[2] ?? null;
+                });
+            when(fn() => $filesystem->fileSize(Arg::any()))->returns(5);
+            $store = new FlysystemStore('flysystem', $filesystem, Fixtures::factory());
+
+            $store->write(Fixtures::upload('hello'), 'g', new FixedPathGenerator('g/a/original.png'), $type);
+
+            Assert::same($configs, [$expected]);
         }
-
-        $declared = new FlysystemStore(
-            'flysystem',
-            $this->filesystem,
-            Fixtures::factory(),
-            semantics: AdapterSemantics::guaranteed(orderedListing: true),
-        );
-
-        $toPaths = static fn(iterable $objects): array => array_map(
-            static fn(StoredObject $o): string => $o->id->relativePath,
-            iterator_to_array($objects, preserve_keys: false),
-        );
-        $rawOrder = array_values(array_map(
-            static fn(StorageAttributes $a): string => $a->path(),
-            array_filter(
-                iterator_to_array($this->filesystem->listContents('', deep: true), preserve_keys: false),
-                static fn(StorageAttributes $a): bool => $a->isFile(),
-            ),
-        ));
-
-        Assert::same($toPaths($declared->objects()), $rawOrder);
-        Assert::same($toPaths($this->store->objects()), ['a/original.bin', 'b/original.bin', 'c/original.bin']);
     }
 
     /**

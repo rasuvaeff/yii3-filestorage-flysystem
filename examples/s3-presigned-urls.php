@@ -47,7 +47,6 @@ $filesystem = new Filesystem(new AwsS3V3Adapter($client, $bucket));
 // null, because it cannot promise the response headers a policy asks for.
 $store = new FlysystemStore(
     name: 's3',
-    filesystem: $filesystem,
     streamFactory: $factory,
     temporaryUrlOptions: new S3TemporaryUrlOptions(),
 );
@@ -95,7 +94,6 @@ echo "body:     {$body}\n\n";
 // Deduplication, against an adapter whose semantics the application declares.
 $dedup = new FlysystemContentAddressableStore(
     store: $store,
-    filesystem: $filesystem,
     semantics: AdapterSemantics::guaranteed(),
 );
 

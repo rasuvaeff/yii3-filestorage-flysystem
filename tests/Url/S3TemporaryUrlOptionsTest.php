@@ -6,6 +6,7 @@ namespace Rasuvaeff\Yii3FilestorageFlysystem\Tests\Url;
 
 use DateTimeImmutable;
 use Rasuvaeff\Yii3Filestorage\File;
+use Rasuvaeff\Yii3Filestorage\Mime\ActiveMediaTypes;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryOptions;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicy;
 use Rasuvaeff\Yii3FilestorageFlysystem\Url\S3TemporaryUrlOptions;
@@ -58,6 +59,52 @@ final class S3TemporaryUrlOptionsTest
     }
 
     /**
+     * The review's probe (A5 / flysystem #2): an uploaded SVG or HTML file in
+     * a group whose policy says inline was signed as `inline` — stored XSS
+     * from the bucket's origin, with no way to add `nosniff` to an S3
+     * response.
+     */
+    public function activeContentIsSignedAsAnAttachment(): void
+    {
+        foreach (['image/svg+xml', 'text/html', 'application/xhtml+xml', 'text/javascript'] as $type) {
+            $config = $this->options->for($this->deliveryOf('x', forceDownload: false, mimeType: $type));
+
+            Assert::string((string) ($config['get_object_options']['ResponseContentDisposition'] ?? ''))
+                ->contains('attachment; filename="x"');
+        }
+    }
+
+    /**
+     * The same list `-web` takes extras for: an application that marks its
+     * own type active gets it forced to download on a presigned URL too, not
+     * only through the proxy.
+     */
+    public function anApplicationsExtraActiveTypeIsAnAttachmentToo(): void
+    {
+        $options = new S3TemporaryUrlOptions(ActiveMediaTypes::withExtra(['application/x-custom-script']));
+
+        $config = $options->for($this->deliveryOf('x.cs', forceDownload: false, mimeType: 'Application/X-Custom-Script'));
+
+        Assert::string((string) ($config['get_object_options']['ResponseContentDisposition'] ?? ''))
+            ->contains('attachment; filename="x.cs"');
+        Assert::string((string) ($this->options->for(
+            $this->deliveryOf('x.cs', forceDownload: false, mimeType: 'application/x-custom-script'),
+        )['get_object_options']['ResponseContentDisposition'] ?? ''))->contains('inline;');
+    }
+
+    /**
+     * A stored media type is not validated beyond "non-empty" — a row this
+     * package never wrote can carry a CR or LF — and S3 echoes the override
+     * back as a header (review 1.0 #15).
+     */
+    public function theResponseTypeIsHeaderSafe(): void
+    {
+        $config = $this->options->for($this->deliveryOf('x', mimeType: "text/pl\r\nain\0"));
+
+        Assert::same($config['get_object_options']['ResponseContentType'] ?? null, 'text/plain');
+    }
+
+    /**
      * A quote in the filename would close the parameter early and let the rest
      * of the name become header syntax. The signed URL is a header the object
      * store echoes back, so this is not cosmetic.
@@ -88,8 +135,7 @@ final class S3TemporaryUrlOptionsTest
         string $name,
         bool $forceDownload = true,
         string $mimeType = 'application/pdf',
-    ): DeliveryOptions
-    {
+    ): DeliveryOptions {
         return DeliveryOptions::fromFile(
             file: File::create(
                 id: 'file-1',

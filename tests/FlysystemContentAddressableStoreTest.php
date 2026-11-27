@@ -52,7 +52,6 @@ final class FlysystemContentAddressableStoreTest
         $this->filesystem = Fixtures::filesystem();
         $this->store = new FlysystemContentAddressableStore(
             store: new FlysystemStore('flysystem', $this->filesystem, Fixtures::factory()),
-            filesystem: $this->filesystem,
             semantics: AdapterSemantics::guaranteed(),
         );
     }
@@ -101,7 +100,6 @@ final class FlysystemContentAddressableStoreTest
         $filesystem = new RacingFilesystem(new InMemoryFilesystemAdapter());
         $store = new FlysystemContentAddressableStore(
             store: new FlysystemStore('flysystem', $filesystem, Fixtures::factory()),
-            filesystem: $filesystem,
             semantics: AdapterSemantics::guaranteed(),
         );
         $object = new StoredObjectId(self::KEY);
@@ -242,7 +240,6 @@ final class FlysystemContentAddressableStoreTest
                 quarantinePrefix: '.quarantine',
                 layout: $layout,
             ),
-            filesystem: $this->filesystem,
             semantics: AdapterSemantics::guaranteed(),
         );
         $this->filesystem->write('blobs/ab/cd/abc.jpg', 'x');
@@ -291,7 +288,6 @@ final class FlysystemContentAddressableStoreTest
     {
         $store = new FlysystemContentAddressableStore(
             store: new FlysystemStore('flysystem', $this->filesystem, Fixtures::factory(), quarantinePrefix: '_q'),
-            filesystem: $this->filesystem,
             semantics: AdapterSemantics::guaranteed(),
         );
 
@@ -465,7 +461,6 @@ final class FlysystemContentAddressableStoreTest
             ->answers(static fn(): never => throw $cause);
         $store = new FlysystemContentAddressableStore(
             store: new FlysystemStore('flysystem', $filesystem, Fixtures::factory()),
-            filesystem: $filesystem,
             semantics: AdapterSemantics::guaranteed(),
         );
 

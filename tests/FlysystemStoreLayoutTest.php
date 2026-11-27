@@ -11,10 +11,10 @@ use League\Flysystem\Filesystem;
 use League\Flysystem\FilesystemOperator;
 use Rasuvaeff\Understudy\Arg;
 use Rasuvaeff\Understudy\Understudy;
+use Rasuvaeff\Yii3Filestorage\Exception\StoreException;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\DirectoryLayout;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\FlatSiblingLayout;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObject;
-use Rasuvaeff\Yii3FilestorageFlysystem\AdapterSemantics;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\Fixtures;
 use Testo\Assert;
@@ -113,10 +113,34 @@ final class FlysystemStoreLayoutTest
         try {
             $this->store(flat: true)->delete(Fixtures::file(relativePath: 'g/foo-bar.jpg'));
             Assert::fail('the flat layout should have refused the name');
-        } catch (InvalidArgumentException) {
+        } catch (StoreException $e) {
+            Assert::instanceOf($e->getPrevious(), InvalidArgumentException::class);
         }
 
         Assert::same($this->paths(), ['g/foo-bar.jpg', 'g/foo.jpg']);
+    }
+
+    /**
+     * The review's probe (A1 / flysystem #4): flat content keys under the
+     * default DirectoryLayout. Deleting one blob used to delete its whole
+     * fan-out bucket; now the layout refuses and nothing is deleted. The
+     * refusal is a StoreException, so `-web` still answers 404.
+     */
+    public function aFlatKeyUnderTheDirectoryLayoutIsRefusedAndItsNeighbourSurvives(): void
+    {
+        $a = 'blobs/ab/cd/' . str_repeat('a', 64) . '.jpg';
+        $b = 'blobs/ab/cd/' . str_repeat('b', 64) . '.jpg';
+        $this->filesystem->write($a, '1');
+        $this->filesystem->write($b, '2');
+
+        try {
+            $this->store()->delete(Fixtures::file(relativePath: $a));
+            Assert::fail('the directory layout should have refused a flat key');
+        } catch (StoreException $e) {
+            Assert::string($e->getMessage())->contains('does not fit the directory layout');
+        }
+
+        Assert::same($this->paths(), [$a, $b]);
     }
 
     /**
@@ -153,7 +177,7 @@ final class FlysystemStoreLayoutTest
             'flysystem',
             $filesystem,
             Fixtures::factory(),
-            semantics: AdapterSemantics::guaranteed(orderedListing: true),
+            orderedListing: true,
         );
 
         $objects = iterator_to_array($store->objects(), preserve_keys: false);
@@ -168,13 +192,15 @@ final class FlysystemStoreLayoutTest
     /**
      * The quarantine must not appear as inventory: the orphan sweep would
      * sweep it, `stat` and `verify` would count it. A sibling prefix that
-     * merely starts the same is ordinary data.
+     * merely starts the same is ordinary data. (An `_` prefix: a `.` one is
+     * hidden from the inventory anyway, siblings included.) Written in
+     * `strcmp` order, so the declared-ordered store accepts the listing.
      */
     public function theInventoryNeverListsTheQuarantine(): void
     {
-        $this->filesystem->write('.quarantine/1700000000-0123456789abcdef/g/a/original.txt', 'held');
-        $this->filesystem->write('.quarantine', 'a file named like the prefix');
-        $this->filesystem->write('.quarantined/g/b/original.txt', 'live');
+        $this->filesystem->write('_quarantine', 'a file named like the prefix');
+        $this->filesystem->write('_quarantine/1700000000-0123456789abcdef/g/a/original.txt', 'held');
+        $this->filesystem->write('_quarantined/g/b/original.txt', 'live');
         $this->filesystem->write('g/c/original.txt', 'live');
 
         foreach ([false, true] as $ordered) {
@@ -182,8 +208,8 @@ final class FlysystemStoreLayoutTest
                 'flysystem',
                 $this->filesystem,
                 Fixtures::factory(),
-                semantics: $ordered ? AdapterSemantics::guaranteed(orderedListing: true) : null,
-                quarantinePrefix: '.quarantine',
+                quarantinePrefix: '_quarantine',
+                orderedListing: $ordered,
             );
 
             $paths = array_map(
@@ -192,16 +218,16 @@ final class FlysystemStoreLayoutTest
             );
             sort($paths);
 
-            Assert::same($paths, ['.quarantined/g/b/original.txt', 'g/c/original.txt']);
+            Assert::same($paths, ['_quarantined/g/b/original.txt', 'g/c/original.txt']);
         }
     }
 
     public function withoutAQuarantineNothingIsHidden(): void
     {
-        $this->filesystem->write('.quarantine/x/original.txt', 'data');
+        $this->filesystem->write('_quarantine/x/original.txt', 'data');
 
         Assert::same(\count(iterator_to_array($this->store()->objects(), preserve_keys: false)), 1);
-        Assert::false($this->store()->isQuarantined('.quarantine/x/original.txt'));
+        Assert::false($this->store()->isQuarantined('_quarantine/x/original.txt'));
     }
 
     private function store(bool $flat = false, ?FlatSiblingLayout $layout = null): FlysystemStore
