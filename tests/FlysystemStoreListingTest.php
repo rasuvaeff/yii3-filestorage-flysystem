@@ -198,6 +198,32 @@ final class FlysystemStoreListingTest
         }
     }
 
+    /**
+     * Review 1.0 pass 2, N14: under `orderedListing` the quarantine's token
+     * listing is streamed like the inventory — the first page does not pull
+     * every token of the prefix into memory first.
+     */
+    public function anOrderedQuarantineListingIsStreamed(): void
+    {
+        $adapter = new CountingAdapter(sorted: true);
+        $filesystem = new Filesystem($adapter);
+        $tokens = $this->quarantineEntries($filesystem, 120);
+        $store = new FlysystemStore(
+            'flysystem',
+            $filesystem,
+            Fixtures::factory(),
+            quarantinePrefix: self::PREFIX,
+            orderedListing: true,
+        );
+        $adapter->reset();
+
+        $page = iterator_to_array($store->quarantined(null, 1), preserve_keys: false);
+
+        Assert::same(\count($page), 1);
+        Assert::same($page[0]->token, $tokens[0]);
+        Assert::true($adapter->shallowDirectories <= 2, "tokens pulled for one entry: {$adapter->shallowDirectories}");
+    }
+
     public function aWronglyDeclaredOrderOfTheQuarantineIsAnError(): void
     {
         $filesystem = new Filesystem(new CountingAdapter(sorted: false));

@@ -596,8 +596,9 @@ final class FlysystemStoreTest
     /**
      * The detected media type is what the object is stored with — on S3 the
      * `ContentType` a public URL serves — rather than Flysystem guessing again
-     * from the extension or the bytes (review 1.0 #15). Header-unsafe bytes
-     * never reach it, and an unknown type leaves the adapter's default. A
+     * from the extension or the bytes (review 1.0 #15). A type that is not
+     * RFC 9110 grammar (CR/LF included) is not stored at all, and an unknown
+     * type leaves the adapter's default. A
      * scriptable type is never stored as itself: core keys it `.bin` so a
      * public bucket serves it as a download (core review 1.0 B5).
      */
@@ -605,7 +606,12 @@ final class FlysystemStoreTest
     {
         $cases = [
             ['image/png', ['ContentType' => 'image/png']],
-            ["text/pl\r\nain", ['ContentType' => 'text/plain']],
+            // malformed (review 1.0 pass 2, N4): stripping CR/LF glued
+            // `image/svg+xmlX: y` together — not stored as a type at all
+            ["text/pl\r\nain", []],
+            ["image/svg+xml\r\nX: y", []],
+            ['text/plain; charset', []],
+            ['text/plain; charset=utf-8', ['ContentType' => 'text/plain; charset=utf-8']],
             ['application/pdf', ['ContentType' => 'application/pdf']],
             [null, []],
             ["\n", []],

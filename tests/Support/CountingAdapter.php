@@ -26,6 +26,9 @@ final class CountingAdapter implements FilesystemAdapter
     /** File entries handed out by all listings together. */
     public int $files = 0;
 
+    /** Directory entries handed out by shallow listings (the quarantine's tokens). */
+    public int $shallowDirectories = 0;
+
     private readonly InMemoryFilesystemAdapter $inner;
 
     public function __construct(private readonly bool $sorted = false)
@@ -37,6 +40,7 @@ final class CountingAdapter implements FilesystemAdapter
     {
         $this->calls = 0;
         $this->files = 0;
+        $this->shallowDirectories = 0;
     }
 
     #[Override]
@@ -51,6 +55,8 @@ final class CountingAdapter implements FilesystemAdapter
         foreach ($entries as $entry) {
             if ($entry instanceof FileAttributes) {
                 $this->files++;
+            } elseif (!$deep) {
+                $this->shallowDirectories++;
             }
 
             yield $entry;

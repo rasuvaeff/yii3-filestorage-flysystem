@@ -12,6 +12,7 @@ use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicy;
 use Rasuvaeff\Yii3FilestorageFlysystem\Url\S3TemporaryUrlOptions;
 use Testo\Assert;
 use Testo\Codecov\Covers;
+use Testo\Data\DataProvider;
 use Testo\Lifecycle\BeforeTest;
 use Testo\Test;
 
@@ -95,13 +96,56 @@ final class S3TemporaryUrlOptionsTest
     /**
      * A stored media type is not validated beyond "non-empty" — a row this
      * package never wrote can carry a CR or LF — and S3 echoes the override
-     * back as a header (review 1.0 #15).
+     * back as a header (review 1.0 #15). Stripping the bytes glued the tokens
+     * around them: `image/svg+xml\r\nX: y` became `image/svg+xmlX: y`, which
+     * is in no active list and was signed `inline` with a type no browser
+     * parses — sniffed, with no `nosniff` on S3 (review 1.0 pass 2, N4). A
+     * type that is not RFC 9110 `type/subtype *(; parameter)` is served as
+     * `application/octet-stream`, as an attachment.
      */
-    public function theResponseTypeIsHeaderSafe(): void
+    #[DataProvider('malformedTypeProvider')]
+    public function aMalformedTypeIsAnOctetStreamAttachment(string $mediaType): void
     {
-        $config = $this->options->for($this->deliveryOf('x', mimeType: "text/pl\r\nain\0"));
+        $config = $this->options->for($this->deliveryOf('x', forceDownload: false, mimeType: $mediaType));
 
-        Assert::same($config['get_object_options']['ResponseContentType'] ?? null, 'text/plain');
+        Assert::same($config['get_object_options']['ResponseContentType'] ?? null, 'application/octet-stream');
+        Assert::string((string) ($config['get_object_options']['ResponseContentDisposition'] ?? ''))
+            ->contains('attachment; filename="x"');
+    }
+
+    public static function malformedTypeProvider(): iterable
+    {
+        yield 'CR/LF gluing a header onto svg' => ["image/svg+xml\r\nX: y"];
+        yield 'CR/LF inside the subtype' => ["text/ht\r\nml"];
+        yield 'NUL' => ["text/plain\0"];
+        yield 'no slash' => ['texthtml'];
+        yield 'empty subtype' => ['text/'];
+        yield 'two slashes' => ['text/html/x'];
+        yield 'space inside' => ['text/ html'];
+        yield 'separator in the type' => ['te(x)t/plain'];
+        yield 'parameter without a value' => ['text/plain; charset'];
+        yield 'unterminated quoted parameter' => ['text/plain; charset="utf-8'];
+        yield 'non-ASCII' => ['text/plаin'];
+    }
+
+    /** Well-formed types, parameters included, pass through as they are. */
+    #[DataProvider('wellFormedTypeProvider')]
+    public function aWellFormedTypePassesThrough(string $mediaType): void
+    {
+        $config = $this->options->for($this->deliveryOf('x', forceDownload: false, mimeType: $mediaType));
+
+        Assert::same($config['get_object_options']['ResponseContentType'] ?? null, $mediaType);
+        Assert::string((string) ($config['get_object_options']['ResponseContentDisposition'] ?? ''))
+            ->contains('inline; filename="x"');
+    }
+
+    public static function wellFormedTypeProvider(): iterable
+    {
+        yield 'plain' => ['image/png'];
+        yield 'with a charset' => ['text/plain; charset=utf-8'];
+        yield 'quoted parameter, no space' => ['text/plain;format="flowed"'];
+        yield 'two parameters' => ['text/plain; charset=utf-8; format=flowed'];
+        yield 'vendor tree' => ['application/vnd.ms-excel'];
     }
 
     /**

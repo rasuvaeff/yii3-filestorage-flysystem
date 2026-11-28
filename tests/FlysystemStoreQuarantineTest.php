@@ -497,9 +497,11 @@ final class FlysystemStoreQuarantineTest
             }
         });
 
+        // "nothing was moved" was untrue: a moved and came back (review 1.0
+        // pass 2, N12).
         $this->assertStoreFailure(
             fn() => $this->quarantineKey(),
-            'Could not quarantine "g/key/b.txt" in store "flysystem"; nothing was moved',
+            'Could not quarantine "g/key/b.txt" in store "flysystem"; moved back: g/key/a.txt',
             $cause,
         );
 
@@ -524,6 +526,10 @@ final class FlysystemStoreQuarantineTest
         $filesystem = $this->filesystem;
         $this->filesystem->on('move', static function (string $source) use ($cause, $filesystem): void {
             if ($source === 'g/key/c.txt') {
+                // S3's move is a copy and a delete: the copy landed, the
+                // delete failed — a partial copy of c sits in the entry too
+                $entry = iterator_to_array($filesystem->listContents(self::PREFIX), preserve_keys: false)[0]->path();
+                $filesystem->write($entry . '/g/key/c.txt', 'c');
                 // a writer re-publishes a while c fails, and b cannot move back
                 $filesystem->write('g/key/a.txt', 'again');
                 $filesystem->on('move', static function (string $source): void {
@@ -539,12 +545,13 @@ final class FlysystemStoreQuarantineTest
         $this->assertStoreFailure(
             fn() => $this->quarantineKey(),
             'Could not quarantine "g/key/c.txt" in store "flysystem"; left in the quarantine, restored by gc while '
-            . 'a row references them: g/key/a.txt, g/key/b.txt',
+            . 'a row references them: g/key/a.txt, g/key/b.txt; the entry also holds a copy of g/key/c.txt, whose '
+            . 'original is in place',
             $cause,
         );
 
         $listed = iterator_to_array($this->store->quarantined(), preserve_keys: false);
-        Assert::same($this->ids($listed[0]->objects), ['g/key/a.txt', 'g/key/b.txt']);
+        Assert::same($this->ids($listed[0]->objects), ['g/key/a.txt', 'g/key/b.txt', 'g/key/c.txt']);
         Assert::same($this->filesystem->read('g/key/a.txt'), 'again');
         Assert::same($this->filesystem->read('g/key/c.txt'), 'c');
     }

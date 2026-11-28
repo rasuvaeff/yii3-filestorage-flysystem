@@ -47,10 +47,15 @@ final readonly class S3TemporaryUrlOptions implements TemporaryUrlOptionsInterfa
     public function for(DeliveryOptions $options): array
     {
         // A stored media type is validated only as non-empty, and S3 echoes
-        // this override back as a header: no CR, LF or NUL may reach it.
-        $mediaType = str_replace(["\r", "\n", "\0"], '', $options->responseMediaType);
-        $mediaType = $mediaType === '' ? DeliveryOptions::DEFAULT_MEDIA_TYPE : $mediaType;
-        $attachment = $options->forceDownload || $this->activeTypes->contains($mediaType);
+        // this override back as a header. Stripping CR/LF glued the tokens
+        // around them into a type no list knows and no browser parses
+        // (review 1.0 pass 2, N4): anything that is not RFC 9110
+        // `type/subtype *(; parameter)` is served as an opaque download.
+        $wellFormed = WellFormedMediaType::of($options->responseMediaType);
+        $mediaType = $wellFormed ?? DeliveryOptions::DEFAULT_MEDIA_TYPE;
+        $attachment = $wellFormed === null
+            || $options->forceDownload
+            || $this->activeTypes->contains($mediaType);
 
         // The name is already CR/LF-free — DeliveryOptions strips those — but it
         // still has to survive being quoted, and a bare `"` would end the

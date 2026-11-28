@@ -36,6 +36,7 @@ use Rasuvaeff\Yii3Filestorage\Upload;
 use Rasuvaeff\Yii3FilestorageFlysystem\Listing\Continuation;
 use Rasuvaeff\Yii3FilestorageFlysystem\Stream\StreamWrapper;
 use Rasuvaeff\Yii3FilestorageFlysystem\Url\TemporaryUrlOptionsInterface;
+use Rasuvaeff\Yii3FilestorageFlysystem\Url\WellFormedMediaType;
 
 /**
  * Objects in anything Flysystem can address: S3, GCS, Azure, FTP, a ZIP file.
@@ -556,7 +557,7 @@ final readonly class FlysystemStore implements
 
                 throw new StoreException(
                     "Could not quarantine \"{$member}\" in store \"{$this->name}\""
-                    . $this->rollBack($quarantine . '/' . $token, $moved),
+                    . $this->rollBack($quarantine . '/' . $token, $moved, $member),
                     0,
                     $e,
                 );
@@ -792,7 +793,39 @@ final readonly class FlysystemStore implements
      */
     private function quarantineEntries(string $quarantine, ?string $after): Generator
     {
-        $tokens = [];
+        $tokens = $this->quarantineTokens($quarantine, $after);
+        if (!$this->orderedListing) {
+            $tokens = iterator_to_array($tokens, preserve_keys: false);
+            sort($tokens, SORT_STRING);
+        }
+
+        foreach ($tokens as $token) {
+            $base = $quarantine . '/' . $token . '/';
+            $objects = [];
+            foreach ($this->filesystem->listContents($base, true) as $attributes) {
+                if ($attributes instanceof FileAttributes) {
+                    $objects[] = new StoredObjectId(substr($attributes->path(), \strlen($base)));
+                }
+            }
+
+            if ($objects !== []) {
+                yield new QuarantinedObject($token, $objects);
+            }
+        }
+    }
+
+    /**
+     * The entry tokens after the cursor, as the adapter lists them — streamed,
+     * so under `orderedListing` the quarantine pass holds no token list in
+     * memory either (review 1.0 pass 2, N14).
+     *
+     * @return Generator<int, string, mixed, void>
+     *
+     * @throws FilesystemException
+     * @throws StoreException
+     */
+    private function quarantineTokens(string $quarantine, ?string $after): Generator
+    {
         $previous = null;
         foreach ($this->filesystem->listContents($quarantine, false) as $attributes) {
             if (!$attributes->isDir()) {
@@ -808,25 +841,7 @@ final readonly class FlysystemStore implements
             }
 
             if (QuarantinedObject::isToken($token) && ($after === null || strcmp($token, $after) > 0)) {
-                $tokens[] = $token;
-            }
-        }
-
-        if (!$this->orderedListing) {
-            sort($tokens, SORT_STRING);
-        }
-
-        foreach ($tokens as $token) {
-            $base = $quarantine . '/' . $token . '/';
-            $objects = [];
-            foreach ($this->filesystem->listContents($base, true) as $attributes) {
-                if ($attributes instanceof FileAttributes) {
-                    $objects[] = new StoredObjectId(substr($attributes->path(), \strlen($base)));
-                }
-            }
-
-            if ($objects !== []) {
-                yield new QuarantinedObject($token, $objects);
+                yield $token;
             }
         }
     }
@@ -874,10 +889,14 @@ final readonly class FlysystemStore implements
      * Puts already moved members back after a failed quarantine.
      *
      * @param list<StoredObjectId> $moved
+     * @param string $failed The member whose move failed. On S3 a move is a
+     *        copy and a delete, so a failed delete leaves a copy of it in
+     *        the entry while the original stays in place.
      *
-     * @return string Appended to the failure message: what could not go back.
+     * @return string Appended to the failure message: what moved back, what
+     *         could not, and what else the entry still holds.
      */
-    private function rollBack(string $entry, array $moved): string
+    private function rollBack(string $entry, array $moved, string $failed): string
     {
         $stuck = [];
         foreach ($moved as $object) {
@@ -901,16 +920,33 @@ final readonly class FlysystemStore implements
         }
 
         if ($stuck !== []) {
-            return '; left in the quarantine, restored by gc while a row references them: ' . implode(', ', $stuck);
+            // The entry stays, and the message names everything in it
+            // (review 1.0 pass 2, N12).
+            try {
+                $copy = $this->filesystem->fileExists($entry . '/' . $failed);
+            } catch (FilesystemException) {
+                $copy = false;
+            }
+
+            return '; left in the quarantine, restored by gc while a row references them: ' . implode(', ', $stuck)
+                . ($copy ? "; the entry also holds a copy of {$failed}, whose original is in place" : '');
         }
 
         try {
+            // A partial copy of the failed member goes with it.
             $this->filesystem->deleteDirectory($entry);
         } catch (FilesystemException) {
             // Empty after the moves back; quarantined() skips an empty entry.
         }
 
-        return '; nothing was moved';
+        if ($moved === []) {
+            return '; nothing was moved';
+        }
+
+        return '; moved back: ' . implode(', ', array_map(
+            static fn(StoredObjectId $object): string => $object->relativePath,
+            $moved,
+        ));
     }
 
     /**
@@ -930,9 +966,12 @@ final readonly class FlysystemStore implements
      */
     private function writeConfig(?string $mediaType): array
     {
-        $mediaType = $mediaType === null ? '' : str_replace(["\r", "\n", "\0"], '', $mediaType);
+        // Whole or not at all: a malformed type (CR/LF included) is left to
+        // the adapter's default rather than stripped into another token
+        // (review 1.0 pass 2, N4).
+        $mediaType = WellFormedMediaType::of($mediaType);
 
-        if ($mediaType === '' || ActiveMediaTypes::scriptable()->contains($mediaType)) {
+        if ($mediaType === null || ActiveMediaTypes::scriptable()->contains($mediaType)) {
             return [];
         }
 

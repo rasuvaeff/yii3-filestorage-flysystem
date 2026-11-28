@@ -22,6 +22,13 @@ use Iterator;
  * its listing taken by another one starts a fresh listing from its own key
  * rather than share the iterator.
  *
+ * A parked listing expires: one not resumed within `maxIdleSeconds` is
+ * dropped on the next call (review 1.0 pass 2, N6). It is a live view of the
+ * bucket as the pass first saw it — without `orderedListing` a sorted
+ * snapshot held in memory — and a long-lived worker continuing it hours
+ * later would miss everything written since in the rest of its range. A
+ * pass that starts from the beginning (`$after === null`) releases it too.
+ *
  * Mutable on purpose inside a readonly store: it is a cache of where the
  * adapter's iterator is, not state of the store.
  *
@@ -36,6 +43,24 @@ final class Continuation
 
     private ?string $last = null;
 
+    private int $parkedAt = 0;
+
+    /** @var \Closure(): int */
+    private readonly \Closure $clock;
+
+    /**
+     * @param positive-int $maxIdleSeconds How long a parked listing may wait
+     *        for its next page.
+     * @param (\Closure(): int)|null $clock Monotonic nanoseconds; `hrtime()`
+     *        by default.
+     */
+    public function __construct(
+        private readonly int $maxIdleSeconds = 300,
+        ?\Closure $clock = null,
+    ) {
+        $this->clock = $clock ?? static fn(): int => hrtime(as_number: true);
+    }
+
     /**
      * Takes the parked listing out, advanced past `$after`, or null when the
      * cursor is not where it stopped.
@@ -45,7 +70,10 @@ final class Continuation
     public function resume(?string $after): ?Iterator
     {
         $iterator = $this->iterator;
-        $continues = $iterator instanceof \Iterator && $after !== null && $after === $this->last;
+        $continues = $iterator instanceof \Iterator
+            && $after !== null
+            && $after === $this->last
+            && ($this->clock)() - $this->parkedAt <= $this->maxIdleSeconds * 1_000_000_000;
         $this->clear();
 
         if (!$continues) {
@@ -64,6 +92,7 @@ final class Continuation
     {
         $this->iterator = $iterator;
         $this->last = $last;
+        $this->parkedAt = ($this->clock)();
     }
 
     /**
