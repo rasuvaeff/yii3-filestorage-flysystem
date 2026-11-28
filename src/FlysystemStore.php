@@ -667,6 +667,18 @@ final readonly class FlysystemStore implements
     }
 
     /**
+     * Where a listing of this entry resumes. A concrete union, not the
+     * template of page(): psalm 7.0 (the prefer-lowest job) does not narrow a
+     * template by instanceof.
+     *
+     * @return non-empty-string
+     */
+    private static function cursorKey(StoredObject|QuarantinedObject $entry): string
+    {
+        return $entry instanceof StoredObject ? $entry->id->relativePath : $entry->token;
+    }
+
+    /**
      * Serves one page from a listing, continuing the parked one when the
      * cursor is where it stopped.
      *
@@ -696,7 +708,7 @@ final readonly class FlysystemStore implements
             while ($entries->valid()) {
                 $entry = $entries->current();
                 \assert($entry !== null);
-                $key = $entry instanceof StoredObject ? $entry->id->relativePath : $entry->token;
+                $key = self::cursorKey($entry);
                 $continuation->park($entries, $key);
 
                 yield $entry;
@@ -775,7 +787,14 @@ final readonly class FlysystemStore implements
         }
         unset($listing);
 
-        usort($entries, static fn(array $a, array $b): int => strcmp($a[0], $b[0]));
+        usort(
+            $entries,
+            /**
+             * @param array{string, int|null, int|null} $a
+             * @param array{string, int|null, int|null} $b
+             */
+            static fn(array $a, array $b): int => strcmp($a[0], $b[0]),
+        );
 
         foreach ($entries as [$path, $modified, $size]) {
             yield $this->storedObject($path, $modified, $size);
