@@ -78,8 +78,10 @@ them from the environment to point at something else. Because `make` always
 supplies an endpoint, it never skips: with no gateway reachable there, the S3
 client fails to connect inside `#[BeforeTest]` and Testo reports the affected
 tests **aborted**, not skipped. `aQuarantinedObjectIsPrivate` skips itself on
-SeaweedFS, which reports every object as private (no ACLs): the quarantine's
-private visibility is verified only against AWS or MinIO.
+SeaweedFS, which reports every object as private (no ACLs). The claim is
+covered in the Unit suite instead: `S3QuarantineAclTest` drives the real
+`AwsS3V3Adapter` against a recording S3 client and asserts `ACL: private` on
+the `CopyObject` into the quarantine (review 1.0 pass 2, N17).
 
 **Skipping is a bare `composer test:integration` behaviour.** Run directly,
 without `make` and with no `FILESTORAGE_S3_*` variable set, `FlysystemStore` is
@@ -165,7 +167,11 @@ unassigned variable, which is also null.
   cursor is the previous page's last key continues it, any other cursor starts
   over. An exhausted listing stays parked once, so the closing empty page costs
   nothing. `FlysystemStoreListingTest` counts adapter calls and entries — keep
-  it at one call per pass.
+  it at one call per pass. A parked listing expires after 300 s idle and is
+  dropped on a cursorless call (pass 2 N6, `ContinuationTest`). Across
+  processes a resume lists from the start (no `StartAfter` in Flysystem 3) —
+  documented cost, not a bug to "fix" with adapter internals (pass 2 N5). The
+  quarantine's tokens are streamed under `orderedListing` (pass 2 N14).
 - **`orderedListing` is verified, never trusted.** It lives on `FlysystemStore`
   (not `AdapterSemantics`, since 0.5). With it, every consecutive pair of the
   deep listing (and of the quarantine's shallow one) is compared and the first
@@ -183,10 +189,14 @@ unassigned variable, which is also null.
   `LayoutCompatibility::assertPaths()`; content keys are `-db`'s to check.
 - **`quarantine()` rolls back.** A failed move puts already moved members back
   (`retain_visibility: false`, like `restore()`); a member that cannot go back is
-  named in the exception and stays under the entry.
+  named in the exception and stays under the entry, and so is a partial S3 copy
+  of the failed member; when everything went back the message says `moved
+  back: …`, `nothing was moved` only when nothing had (pass 2 N12).
 - **Active content is `attachment` on a presigned URL.** `S3TemporaryUrlOptions`
   repeats core's `DeliveryOptions` rule with its own `ActiveMediaTypes` (extras
-  configurable) and strips CR/LF/NUL from the response type. `write()` passes
+  configurable). A type that fails RFC 9110 grammar (`Url\WellFormedMediaType`)
+  is `application/octet-stream` + `attachment`, and `write()` stores no
+  `ContentType` for it — never strip CR/LF, it glues tokens (pass 2 N4). `write()` passes
   the detected type as S3 `ContentType` — never a scriptable one: core keys
   those `.bin` so a public bucket serves them as octet-stream, and storing
   `image/svg+xml` would undo that (core review 1.0 B5). `putIfAbsent()` has no

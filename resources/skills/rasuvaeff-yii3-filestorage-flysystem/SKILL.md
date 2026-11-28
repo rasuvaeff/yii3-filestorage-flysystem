@@ -55,13 +55,18 @@ results. Namespace `Rasuvaeff\Yii3FilestorageFlysystem\`. Full API reference:
    write or restore into it, always move into it with private visibility.
    `restore()` is check-then-move: not atomic on S3, correct only because the
    keys it restores are content hashes. A failed `quarantine()` puts back what
-   it already moved (core 0.10 contract).
+   it already moved (core 0.10 contract). A stored media type that fails RFC
+   9110 grammar is never cleaned: presign it as octet-stream attachment, store
+   no `ContentType`.
 
 8. **One listing per `gc` pass, never one per page.** `objects()` and
    `quarantined()` continue the parked listing when the cursor is the previous
    page's last key. `orderedListing: true` (S3, GCS, Azure only) streams and
    verifies `strcmp` order pair by pair — a wrong flag must stay a
-   `StoreException`, never become a silently shorter inventory.
+   `StoreException`, never become a silently shorter inventory. Not for S3
+   Express directory buckets. Resuming in a new process re-lists up to the
+   cursor (no `StartAfter`): run a pass in one process; a parked listing
+   expires after 300 s.
 
 9. **The path generator must fit the layout.** DI calls
    `LayoutCompatibility::assertPaths()`; a flat key under `DirectoryLayout` is

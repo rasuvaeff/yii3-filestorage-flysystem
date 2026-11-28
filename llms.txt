@@ -35,12 +35,18 @@ Binds `StoreInterface` only. Does NOT bind `StorageInterface` (core's),
    `gc` cannot delete from the store. The prefix's first segment starts with `.`
    or `_`; keep it out of any public bucket policy. `restore()` is
    check-then-move — not atomic on S3, correct for content-addressed keys.
-   A failed `quarantine()` puts the members it already moved back.
+   A failed `quarantine()` puts the members it already moved back; the message
+   says `moved back: …` / `nothing was moved`, or names what stayed in the entry
+   (plus a partial S3 copy of the failed member, original in place).
 8. **One listing per gc pass.** A page whose cursor is the last key of the
    previous page continues that listing. `orderedListing: true` (S3, GCS,
    Azure) streams it and verifies `strcmp` order pair by pair — a wrong
    declaration is a `StoreException`, never a short inventory; `false` sorts
    once per pass. Paths with a `.`-segment and the quarantine are never listed.
+   A new process resumes by listing from the start up to the cursor (no
+   `StartAfter` in Flysystem 3: `k` runs cost ~`k²·m/2` entries) — run a pass
+   in one process. A parked listing expires after 300 s idle and on a cursorless
+   call. Not for S3 Express directory buckets (no lexicographic order).
 9. **Path generator and layout are checked at boot** (DI,
    `LayoutCompatibility::assertPaths`). A path `DirectoryLayout` refuses (a flat
    key) makes `delete()` throw `StoreException`, deleting nothing.
@@ -140,7 +146,11 @@ which `AwsS3V3Adapter::temporaryUrl()` signs into the presigned `GetObject`.
 Disposition follows RFC 6266: a quote-safe ASCII `filename` plus a
 percent-encoded `filename*`. `new S3TemporaryUrlOptions(?ActiveMediaTypes $activeTypes = null)`:
 every active type is `attachment` whatever the policy (default list, or
-`ActiveMediaTypes::withExtra([...])`); CR/LF/NUL are stripped from the type.
+`ActiveMediaTypes::withExtra([...])` — build it from `-web`'s
+`extraActiveMediaTypes` param so proxy and presign share one list). A type that
+is not RFC 9110 `type/subtype *(; name=value)` (CR/LF included) is signed as
+`application/octet-stream` + `attachment`, never cleaned (stripping glued
+tokens: review pass 2 N4); `write()` then stores no `ContentType`.
 
 ### `Stream\StreamWrapper` (`@internal`)
 

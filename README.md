@@ -124,7 +124,7 @@ $store = new FlysystemStore(
 | `layout()` | `DirectoryLayout` unless configured. Chosen once per store: switching it on existing data orphans every derivative |
 | `delete(File)` | `DirectoryLayout`: the key directory prefix, derivatives included. `FlatSiblingLayout`: `<base>.<ext>` and `<base>-*` in the same directory, found with one shallow listing. A path the layout refuses — a flat key such as `blobs/ab/cd/<sha>.jpg` under `DirectoryLayout`, whose directory is every neighbour's too — is a `StoreException`, and nothing is deleted |
 | `objects()` | `StoredObject` with `lastModified` and `size` from the listing itself (S3 `ListObjectsV2`), no request per object. An adapter that omits the timestamp yields null, and `gc` never sweeps such an object. Never lists the quarantine prefix, nor a path with a segment starting with `.` (`.keep`, `.well-known/`) — no generator emits one |
-| `quarantine()` | `move()` to `<prefix>/<token>/<path>` with private visibility — Flysystem's S3 copy would otherwise carry a public ACL into the quarantine. A move that fails puts the members already moved back first (they get the default visibility, like a restore); one that cannot go back stays under the entry, named in the exception, and the next `gc` restores it while a row references it |
+| `quarantine()` | `move()` to `<prefix>/<token>/<path>` with private visibility — Flysystem's S3 copy would otherwise carry a public ACL into the quarantine. A move that fails puts the members already moved back first (they get the default visibility, like a restore) and the exception says so (`moved back: …`, or `nothing was moved`); one that cannot go back stays under the entry, named in the exception together with a partial copy of the failed member when S3's copy-then-delete left one (its original is in place), and the next `gc` restores it while a row references it. That the copy into the quarantine carries `ACL: private` is checked against the real `AwsS3V3Adapter` in the unit suite (SeaweedFS in CI has no object ACLs) |
 | `restore()` | Put-if-absent per object: a key re-published meanwhile is kept. A `fileExists()` then `move()`, and on S3 a move is a copy plus a delete: **not atomic**. Correct for what `gc` restores — content-addressed keys, where a racing writer published the same bytes. A restored object gets the filesystem's default visibility, like a fresh write |
 | `purge()` / `quarantined()` | Delete an entry; list entries in token (time) order |
 | `quarantineProblem()` | A message when no prefix is configured — `gc` then refuses to delete from the store |
@@ -137,13 +137,32 @@ whole pass costs **one** listing of the bucket (one `ListObjectsV2` per 1000
 keys), not one per page; any other cursor — a run resumed with `--after`, a new
 process — starts a fresh listing and skips forward.
 
-| `orderedListing` | Inventory | Memory |
-|---|---|---|
-| `false` (default) | One deep listing per pass, sorted once | Proportional to the bucket, once per pass |
-| `true` | One deep listing per pass, streamed | Constant |
+| `orderedListing` | Inventory | Quarantine entries | Memory |
+|---|---|---|---|
+| `false` (default) | One deep listing per pass, sorted once | Tokens listed and sorted once | Proportional to the bucket, once per pass |
+| `true` | One deep listing per pass, streamed | Tokens streamed | Constant (one entry's member list at a time) |
+
+**Resuming in a new process is not free.** Flysystem 3 exposes no
+`StartAfter`, so a run that resumes from a cursor lists the bucket from its
+start up to the cursor before its first new key. A full pass split into `k`
+runs of `--max-scan m` pulls about `k²·m/2` entries: 1 M keys in runs of 10 000
+is ~50 M entries (~50 000 `ListObjectsV2` calls) instead of 1 M. Bound it by
+running a pass in **one process** where you can (`gc` without `--max-scan`, or
+a `--max-scan` large enough for few runs); `--limit`/`--max-scan` are for
+spreading I/O, not for cheap checkpoints. Within one process the listing is
+continued, not restarted.
+
+**A parked listing expires.** Between two pages the store keeps the adapter's
+iterator. One not continued within 300 seconds is dropped on the next call and
+the listing starts fresh — a long-lived worker (a queue consumer running `gc`
+as a service) does not continue a snapshot hours old and miss what was written
+since. A call with no cursor (a new pass) drops it too. Until then the parked
+listing holds its memory (without `orderedListing`, the sorted inventory).
 
 Declare `true` only for an adapter that lists keys in `strcmp` (byte) order:
-S3 and S3-compatible services, GCS, Azure — not a local or FTP adapter. A wrong
+S3 general-purpose buckets and S3-compatible services, GCS, Azure — not a local
+or FTP adapter, and not an S3 Express One Zone *directory* bucket, which does
+not promise lexicographic order. A wrong
 `true` cannot lose objects silently: every consecutive pair is compared, and the
 first key out of order ends the pass with a `StoreException`
 (`… does not list in strcmp order …`).
@@ -198,12 +217,24 @@ given here too:
 use Rasuvaeff\Yii3Filestorage\Mime\ActiveMediaTypes;
 
 TemporaryUrlOptionsInterface::class => static fn (): TemporaryUrlOptionsInterface
-    => new S3TemporaryUrlOptions(ActiveMediaTypes::withExtra(['application/x-my-script'])),
+    => new S3TemporaryUrlOptions(ActiveMediaTypes::withExtra(
+        $params['rasuvaeff/yii3-filestorage-web']['extraActiveMediaTypes'],
+    )),
 ```
 
-CR, LF and NUL are stripped from the response type. `write()` also stores the
+The extra types are configured in two places — `-web`'s
+`extraActiveMediaTypes` param for the proxy, this constructor for presigned
+URLs — and a type added to only one of them is an attachment through the
+proxy and `inline` on a presigned URL. Build this one from `-web`'s param, as
+above, so there is a single list (core has no shared binding for it yet).
+
+A stored media type that is not RFC 9110 grammar (`type/subtype`, optional
+`; name=value` parameters, ASCII) — a CR or LF in it included — is signed as
+`application/octet-stream`, as an attachment. It is not cleaned: stripping
+CR/LF from `image/svg+xml\r\nX: y` glued `image/svg+xmlX: y`, a type in no
+list that no browser parses, and S3 cannot add `nosniff`. `write()` also stores the
 detected media type as the object's `ContentType`, which is what a public URL
-serves — except a scriptable type (HTML, SVG, XML, script): core gives those
+serves (a malformed one is not stored at all) — except a scriptable type (HTML, SVG, XML, script): core gives those
 the inert `.bin` key, and the object keeps the type of that key,
 `application/octet-stream`, so a public bucket serves it as a download.
 `putIfAbsent()` takes no media type and leaves it to the adapter.
