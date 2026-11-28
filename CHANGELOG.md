@@ -5,9 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.5.0 — 2026-11-28
 
-Pre-1.0 minor (planned 0.5.0): requires `rasuvaeff/yii3-filestorage` `^0.10`, and fixes the pre-1.0 review (2026-11-27).
+Pre-1.0 review fixes (#20).
+
+Pre-1.0 minor: requires `rasuvaeff/yii3-filestorage` `^0.10`, and fixes the pre-1.0 review (2026-11-27).
 
 - **Changed:** requires `rasuvaeff/yii3-filestorage` `^0.10`; this release does not install with core 0.9. Stay on 0.4.0 for 0.9.
 - **BC break:** `deleteObject()` is gone from `FlysystemStore` and `FlysystemContentAddressableStore` (core 0.10 removed it from `MaintenanceStoreInterface`). `objects()` yields core 0.10's `StoredObject` — read `$object->id->relativePath`.
