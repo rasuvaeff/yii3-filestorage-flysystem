@@ -167,7 +167,7 @@ unassigned variable, which is also null.
   cursor is the previous page's last key continues it, any other cursor starts
   over. An exhausted listing stays parked once, so the closing empty page costs
   nothing. `FlysystemStoreListingTest` counts adapter calls and entries — keep
-  it at one call per pass. A parked listing expires after 300 s idle and is
+  it at one call per pass. A parked listing expires after an hour idle and is
   dropped on a cursorless call (pass 2 N6, `ContinuationTest`). Across
   processes a resume lists from the start (no `StartAfter` in Flysystem 3) —
   documented cost, not a bug to "fix" with adapter internals (pass 2 N5). The

@@ -50,12 +50,15 @@ final class Continuation
 
     /**
      * @param positive-int $maxIdleSeconds How long a parked listing may wait
-     *        for its next page.
+     *        for its next page. Measured from park to resume, so it includes
+     *        the caller's work on the page (500 quarantine moves on S3): an
+     *        hour, not minutes — a listing dropped mid-pass makes every later
+     *        page re-list from the start.
      * @param (\Closure(): int)|null $clock Monotonic nanoseconds; `hrtime()`
      *        by default.
      */
     public function __construct(
-        private readonly int $maxIdleSeconds = 300,
+        private readonly int $maxIdleSeconds = 3600,
         ?\Closure $clock = null,
     ) {
         $this->clock = $clock ?? static fn(): int => hrtime(as_number: true);

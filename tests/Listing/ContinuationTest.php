@@ -46,6 +46,23 @@ final class ContinuationTest
         Assert::false($continuation->holds($iterator));
     }
 
+    /** The default is an hour: a slow page of gc work must not drop the pass's listing. */
+    public function theDefaultIdleLimitIsAnHour(): void
+    {
+        $now = 0;
+        /** @var Continuation<string> $continuation */
+        $continuation = new Continuation(clock: static function () use (&$now): int {
+            return $now;
+        });
+        $continuation->park(new ArrayIterator(['a', 'b']), 'a');
+        $now = 3600 * 1_000_000_000;
+        Assert::notNull($continuation->resume('a'));
+
+        $continuation->park(new ArrayIterator(['a', 'b']), 'a');
+        $now += 3600 * 1_000_000_000 + 1;
+        Assert::null($continuation->resume('a'));
+    }
+
     public function anotherCursorStartsOver(): void
     {
         $continuation = $this->continuation();

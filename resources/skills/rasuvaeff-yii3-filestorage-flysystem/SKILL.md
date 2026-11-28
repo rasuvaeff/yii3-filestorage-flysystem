@@ -66,7 +66,7 @@ results. Namespace `Rasuvaeff\Yii3FilestorageFlysystem\`. Full API reference:
    `StoreException`, never become a silently shorter inventory. Not for S3
    Express directory buckets. Resuming in a new process re-lists up to the
    cursor (no `StartAfter`): run a pass in one process; a parked listing
-   expires after 300 s.
+   expires after an hour idle.
 
 9. **The path generator must fit the layout.** DI calls
    `LayoutCompatibility::assertPaths()`; a flat key under `DirectoryLayout` is

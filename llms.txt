@@ -45,7 +45,7 @@ Binds `StoreInterface` only. Does NOT bind `StorageInterface` (core's),
    once per pass. Paths with a `.`-segment and the quarantine are never listed.
    A new process resumes by listing from the start up to the cursor (no
    `StartAfter` in Flysystem 3: `k` runs cost ~`k²·m/2` entries) — run a pass
-   in one process. A parked listing expires after 300 s idle and on a cursorless
+   in one process. A parked listing expires after an hour idle and on a cursorless
    call. Not for S3 Express directory buckets (no lexicographic order).
 9. **Path generator and layout are checked at boot** (DI,
    `LayoutCompatibility::assertPaths`). A path `DirectoryLayout` refuses (a flat

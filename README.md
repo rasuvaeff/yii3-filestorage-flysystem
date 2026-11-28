@@ -153,7 +153,7 @@ spreading I/O, not for cheap checkpoints. Within one process the listing is
 continued, not restarted.
 
 **A parked listing expires.** Between two pages the store keeps the adapter's
-iterator. One not continued within 300 seconds is dropped on the next call and
+iterator. One not continued within an hour is dropped on the next call and
 the listing starts fresh — a long-lived worker (a queue consumer running `gc`
 as a service) does not continue a snapshot hours old and miss what was written
 since. A call with no cursor (a new pass) drops it too. Until then the parked
