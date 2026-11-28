@@ -12,11 +12,12 @@ use League\Flysystem\UnableToWriteFile;
 use Rasuvaeff\Understudy\Arg;
 use Rasuvaeff\Understudy\Understudy;
 use Rasuvaeff\Yii3Filestorage\Exception\StoreException;
-use Rasuvaeff\Yii3Filestorage\Exception\UploadTooLargeException;
+use Rasuvaeff\Yii3Filestorage\Exception\UploadSizeException;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Store\ContentAddressableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\FlatSiblingLayout;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectSet;
+use Rasuvaeff\Yii3Filestorage\Store\PubliclyReadableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\QuarantinedObject;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
 use Rasuvaeff\Yii3Filestorage\Store\StoreResult;
@@ -52,7 +53,6 @@ final class FlysystemContentAddressableStoreTest
         $this->filesystem = Fixtures::filesystem();
         $this->store = new FlysystemContentAddressableStore(
             store: new FlysystemStore('flysystem', $this->filesystem, Fixtures::factory()),
-            filesystem: $this->filesystem,
             semantics: AdapterSemantics::guaranteed(),
         );
     }
@@ -101,7 +101,6 @@ final class FlysystemContentAddressableStoreTest
         $filesystem = new RacingFilesystem(new InMemoryFilesystemAdapter());
         $store = new FlysystemContentAddressableStore(
             store: new FlysystemStore('flysystem', $filesystem, Fixtures::factory()),
-            filesystem: $filesystem,
             semantics: AdapterSemantics::guaranteed(),
         );
         $object = new StoredObjectId(self::KEY);
@@ -147,7 +146,7 @@ final class FlysystemContentAddressableStoreTest
 
     public function aKnownOversizedUploadIsRefusedBeforeAnyWrite(): void
     {
-        Expect::exception(UploadTooLargeException::class)->withMessageContaining('exceeds the 3 byte limit');
+        Expect::exception(UploadSizeException::class)->withMessageContaining('exceeds the 3 byte limit');
 
         $this->store->putIfAbsent(Fixtures::upload('hello'), new StoredObjectId(self::KEY), maxBytes: 3);
     }
@@ -183,7 +182,7 @@ final class FlysystemContentAddressableStoreTest
         try {
             $this->store->putIfAbsent($upload, new StoredObjectId(self::KEY), maxBytes: 3);
             Assert::fail('the cap should have refused this upload');
-        } catch (UploadTooLargeException $e) {
+        } catch (UploadSizeException $e) {
             Assert::string($e->getMessage())->contains('exceeds the 3 byte limit');
         }
 
@@ -194,7 +193,7 @@ final class FlysystemContentAddressableStoreTest
     {
         try {
             $this->store->putIfAbsent(Fixtures::upload('hello'), new StoredObjectId(self::KEY), maxBytes: 3);
-        } catch (UploadTooLargeException) {
+        } catch (UploadSizeException) {
             // asserted in its own test
         }
 
@@ -223,7 +222,7 @@ final class FlysystemContentAddressableStoreTest
         );
         Assert::same(\count(iterator_to_array($this->store->objects(), preserve_keys: false)), 1);
 
-        $this->store->deleteObject(new StoredObjectId($result->relativePath));
+        $this->store->delete($file);
         Assert::false($this->store->exists($file));
     }
 
@@ -242,7 +241,6 @@ final class FlysystemContentAddressableStoreTest
                 quarantinePrefix: '.quarantine',
                 layout: $layout,
             ),
-            filesystem: $this->filesystem,
             semantics: AdapterSemantics::guaranteed(),
         );
         $this->filesystem->write('blobs/ab/cd/abc.jpg', 'x');
@@ -274,6 +272,22 @@ final class FlysystemContentAddressableStoreTest
         Assert::same(iterator_to_array($store->quarantined()), []);
     }
 
+    /**
+     * Deduplicated blobs live in the same bucket: the decorator is exactly as
+     * public as the store it wraps.
+     */
+    public function publicReadabilityIsTheWrappedStores(): void
+    {
+        $public = new FlysystemContentAddressableStore(
+            store: new FlysystemStore('flysystem', $this->filesystem, Fixtures::factory(), publicBucket: true),
+            semantics: AdapterSemantics::guaranteed(),
+        );
+
+        Assert::instanceOf($this->store, PubliclyReadableStoreInterface::class);
+        Assert::false($this->store->isPubliclyReadable());
+        Assert::true($public->isPubliclyReadable());
+    }
+
     public function aStoreWithoutAQuarantineReportsItThroughTheDecorator(): void
     {
         Assert::same(
@@ -291,7 +305,6 @@ final class FlysystemContentAddressableStoreTest
     {
         $store = new FlysystemContentAddressableStore(
             store: new FlysystemStore('flysystem', $this->filesystem, Fixtures::factory(), quarantinePrefix: '_q'),
-            filesystem: $this->filesystem,
             semantics: AdapterSemantics::guaranteed(),
         );
 
@@ -391,7 +404,7 @@ final class FlysystemContentAddressableStoreTest
     {
         $this->filesystem->write(self::KEY, 'hello');
 
-        Expect::exception(UploadTooLargeException::class)->withMessageContaining('exceeds the 2 byte limit');
+        Expect::exception(UploadSizeException::class)->withMessageContaining('exceeds the 2 byte limit');
 
         $this->store->putIfAbsent($this->unsizedUpload('hello'), new StoredObjectId(self::KEY), maxBytes: 2);
     }
@@ -465,7 +478,6 @@ final class FlysystemContentAddressableStoreTest
             ->answers(static fn(): never => throw $cause);
         $store = new FlysystemContentAddressableStore(
             store: new FlysystemStore('flysystem', $filesystem, Fixtures::factory()),
-            filesystem: $filesystem,
             semantics: AdapterSemantics::guaranteed(),
         );
 

@@ -5,33 +5,38 @@ declare(strict_types=1);
 namespace Rasuvaeff\Yii3FilestorageFlysystem;
 
 use DateTimeImmutable;
+use Generator;
 use InvalidArgumentException;
+use Iterator;
 use League\Flysystem\Config;
 use League\Flysystem\FileAttributes;
 use League\Flysystem\FilesystemException;
 use League\Flysystem\FilesystemOperator;
-use League\Flysystem\StorageAttributes;
 use League\Flysystem\Visibility;
 use Override;
 use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Http\Message\StreamInterface;
 use Rasuvaeff\Yii3Filestorage\Exception\StoreException;
-use Rasuvaeff\Yii3Filestorage\Exception\UploadTooLargeException;
+use Rasuvaeff\Yii3Filestorage\Exception\UploadSizeException;
 use Rasuvaeff\Yii3Filestorage\File;
+use Rasuvaeff\Yii3Filestorage\Mime\ActiveMediaTypes;
 use Rasuvaeff\Yii3Filestorage\Path\PathGeneratorInterface;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryOptions;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\DirectoryLayout;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectLayoutInterface;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectSet;
 use Rasuvaeff\Yii3Filestorage\Store\MaintenanceStoreInterface;
+use Rasuvaeff\Yii3Filestorage\Store\PubliclyReadableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\QuarantinedObject;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObject;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
 use Rasuvaeff\Yii3Filestorage\Store\StoreResult;
 use Rasuvaeff\Yii3Filestorage\Store\StoreUrlProviderInterface;
 use Rasuvaeff\Yii3Filestorage\Upload;
+use Rasuvaeff\Yii3FilestorageFlysystem\Listing\Continuation;
 use Rasuvaeff\Yii3FilestorageFlysystem\Stream\StreamWrapper;
 use Rasuvaeff\Yii3FilestorageFlysystem\Url\TemporaryUrlOptionsInterface;
+use Rasuvaeff\Yii3FilestorageFlysystem\Url\WellFormedMediaType;
 
 /**
  * Objects in anything Flysystem can address: S3, GCS, Azure, FTP, a ZIP file.
@@ -70,7 +75,10 @@ use Rasuvaeff\Yii3FilestorageFlysystem\Url\TemporaryUrlOptionsInterface;
  *
  * @api
  */
-final readonly class FlysystemStore implements StoreUrlProviderInterface, MaintenanceStoreInterface
+final readonly class FlysystemStore implements
+    StoreUrlProviderInterface,
+    MaintenanceStoreInterface,
+    PubliclyReadableStoreInterface
 {
     private const string NAME_PATTERN = '/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/';
     /**
@@ -89,6 +97,12 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
 
     private ObjectLayoutInterface $layout;
 
+    /** @var Continuation<StoredObject> */
+    private Continuation $objectsListing;
+
+    /** @var Continuation<QuarantinedObject> */
+    private Continuation $quarantineListing;
+
     /**
      * @param TemporaryUrlOptionsInterface|null $temporaryUrlOptions Absent means
      *        no presigned URLs: without a mapping this store cannot promise the
@@ -101,6 +115,18 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
      *        delete from.
      * @param ObjectLayoutInterface|null $layout Null is {@see DirectoryLayout},
      *        the default. Chosen once for the lifetime of the data.
+     * @param bool $orderedListing The adapter lists paths in `strcmp` order:
+     *        true for S3 and S3-compatible services (UTF-8 binary key order),
+     *        GCS and Azure; false for a local or FTP adapter. True streams the
+     *        inventory with constant memory; false sorts it once per pass.
+     *        Every consecutive pair is checked, so a wrong `true` is a
+     *        {@see StoreException} on the first out-of-order key, never a
+     *        silently shorter inventory.
+     * @param bool $publicBucket The bucket answers every object's URL without
+     *        credentials (a public-read bucket policy or ACL). The operator's
+     *        statement, not something this store can probe: true makes
+     *        `filestorage:check` apply its active-content rule to every group.
+     *        It changes nothing else — no URL, no visibility on write.
      *
      * @throws InvalidArgumentException
      */
@@ -109,9 +135,10 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
         private FilesystemOperator $filesystem,
         private StreamFactoryInterface $streamFactory,
         private ?TemporaryUrlOptionsInterface $temporaryUrlOptions = null,
-        private ?AdapterSemantics $semantics = null,
         ?string $quarantinePrefix = null,
         ?ObjectLayoutInterface $layout = null,
+        private bool $orderedListing = false,
+        private bool $publicBucket = false,
     ) {
         if ($name === '' || preg_match(self::NAME_PATTERN, $name) !== 1) {
             throw new InvalidArgumentException("Invalid store name \"{$name}\"");
@@ -130,6 +157,38 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
         $this->name = $name;
         $this->quarantinePrefix = $quarantinePrefix;
         $this->layout = $layout ?? new DirectoryLayout();
+        /** @var Continuation<StoredObject> $objectsListing */
+        $objectsListing = new Continuation();
+        $this->objectsListing = $objectsListing;
+        /** @var Continuation<QuarantinedObject> $quarantineListing */
+        $quarantineListing = new Continuation();
+        $this->quarantineListing = $quarantineListing;
+    }
+
+    /**
+     * The operator this store writes through, so that
+     * {@see FlysystemContentAddressableStore} cannot be given a different one.
+     *
+     * @internal
+     */
+    public function filesystem(): FilesystemOperator
+    {
+        return $this->filesystem;
+    }
+
+    /**
+     * Whether {@see objects()} and {@see quarantined()} trust the adapter's
+     * listing order (and verify it) instead of sorting.
+     */
+    public function orderedListing(): bool
+    {
+        return $this->orderedListing;
+    }
+
+    #[Override]
+    public function isPubliclyReadable(): bool
+    {
+        return $this->publicBucket;
     }
 
     #[Override]
@@ -194,7 +253,7 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
 
         $declared = $upload->size();
         if ($maxBytes > 0 && $declared !== null && $declared > $maxBytes) {
-            throw new UploadTooLargeException(
+            throw new UploadSizeException(
                 "Upload of {$declared} bytes exceeds the {$maxBytes} byte limit for group \"{$groupName}\"",
             );
         }
@@ -209,7 +268,7 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
                 );
             }
 
-            $this->filesystem->writeStream($path, StreamWrapper::wrap($upload->stream()));
+            $this->filesystem->writeStream($path, StreamWrapper::wrap($upload->stream()), $this->writeConfig($mediaType));
             $written = $this->filesystem->fileSize($path);
         } catch (FilesystemException $e) {
             throw new StoreException("Could not write \"{$path}\" to store \"{$this->name}\"", 0, $e);
@@ -218,7 +277,7 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
         if ($maxBytes > 0 && $written > $maxBytes) {
             $this->deleteObject($object);
 
-            throw new UploadTooLargeException(
+            throw new UploadSizeException(
                 "Upload of {$written} bytes exceeds the {$maxBytes} byte limit for group \"{$groupName}\"",
             );
         }
@@ -240,7 +299,19 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
     #[Override]
     public function delete(File $file): void
     {
-        $set = $this->layout->deletion(new StoredObjectId($file->relativePath));
+        try {
+            $set = $this->layout->deletion(new StoredObjectId($file->relativePath));
+        } catch (InvalidArgumentException $e) {
+            // A path the layout refuses — a flat key under DirectoryLayout,
+            // whose "directory" is every neighbour's too — is a store error:
+            // FilestorageException handlers (-web's 404) keep working, and
+            // nothing is deleted (review 1.0 A1).
+            throw new StoreException(
+                "Cannot delete \"{$file->relativePath}\" from store \"{$this->name}\": {$e->getMessage()}",
+                0,
+                $e,
+            );
+        }
 
         try {
             if (!$set->isTree()) {
@@ -401,63 +472,34 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
         return $url === '' ? null : $url;
     }
 
+    /**
+     * One page of the inventory, in `strcmp` order.
+     *
+     * A page that starts where the previous one ended continues the same
+     * listing, so a whole pass costs one listing of the store, not one per
+     * page (review 1.0 #6). Any other cursor starts a fresh listing and skips
+     * forward. With {@see orderedListing()} the listing is streamed and its
+     * order verified pair by pair; without it, it is read and sorted once per
+     * pass — memory proportional to the store, once, instead of per page.
+     *
+     * Never lists the quarantine, nor a path with a segment starting with `.`
+     * (`.keep`, `.well-known/`): no generator emits one.
+     */
     #[Override]
     public function objects(
         ?string $afterPath = null,
         int $limit = 1000,
     ): iterable {
-        try {
-            $yielded = 0;
-
-            // Not sortByPath(): that is toArray() + usort() under the hood, so
-            // it materialises and orders the entire bucket before the first
-            // yield — and `filestorage:gc` calls this once per page, which
-            // turns a resumable cursor into a full listing per page and an
-            // out-of-memory failure on a large store.
-            //
-            // The cursor needs the listing to be in strcmp order, and whether
-            // it is belongs to the adapter: S3 returns keys in UTF-8 binary
-            // order, a local filesystem returns directory order. The package
-            // cannot verify that, so the application declares it the same way
-            // it declares atomicity and immutability — and when it has not,
-            // this falls back to sorting and pays the price knowingly.
-            $listing = $this->filesystem->listContents('', true);
-            $entries = $this->semantics?->orderedListing === true ? $listing : $listing->sortByPath();
-
-            /** @var StorageAttributes $attributes */
-            foreach ($entries as $attributes) {
-                if (!$attributes instanceof FileAttributes) {
-                    continue;
-                }
-
-                $path = $attributes->path();
-                if ($this->isQuarantined($path) || ($afterPath !== null && strcmp($path, $afterPath) <= 0)) {
-                    continue;
-                }
-
-                // Both come with the listing (S3's ListObjectsV2 carries
-                // LastModified and Size), so this costs no request per object.
-                // An adapter that leaves the timestamp out gets null, and the
-                // orphan sweep never deletes an undated object.
-                $modified = $attributes->lastModified();
-
-                yield new StoredObject(
-                    id: new StoredObjectId($path),
-                    lastModified: $modified === null ? null : new DateTimeImmutable('@' . $modified),
-                    size: $attributes->fileSize(),
-                );
-
-                if (++$yielded >= $limit) {
-                    return;
-                }
-            }
-        } catch (FilesystemException $e) {
-            throw new StoreException("Could not list store \"{$this->name}\"", 0, $e);
-        }
+        return $this->page(
+            $this->objectsListing,
+            $afterPath,
+            $limit,
+            fn(?string $after): Iterator => $this->inventory($after),
+            "Could not list store \"{$this->name}\"",
+        );
     }
 
-    #[Override]
-    public function deleteObject(StoredObjectId $object): void
+    private function deleteObject(StoredObjectId $object): void
     {
         try {
             // Flysystem's delete() is already idempotent on a missing object,
@@ -479,8 +521,13 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
      * otherwise carries the source's ACL along and a deleted public object
      * would stay downloadable for the whole retention period. A member that
      * vanished between the listing and its move is skipped, as on a local
-     * filesystem; any other failure stops the entry where it is, and what was
-     * already moved stays findable through {@see quarantined()}.
+     * filesystem. Any other failure puts the members already moved back
+     * before throwing, so the set stays whole (core 0.10 contract): a
+     * half-quarantined set whose row stays would have the moved part purged
+     * by the retention. A member that cannot go back stays under the entry,
+     * where {@see quarantined()} finds it and `gc` restores it while a row
+     * references it. A member put back gets the filesystem's default
+     * visibility, like {@see restore()}.
      */
     #[Override]
     public function quarantine(ObjectSet $objects, DateTimeImmutable $now): ?QuarantinedObject
@@ -508,7 +555,12 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
                     continue;
                 }
 
-                throw new StoreException("Could not quarantine \"{$member}\" in store \"{$this->name}\"", 0, $e);
+                throw new StoreException(
+                    "Could not quarantine \"{$member}\" in store \"{$this->name}\""
+                    . $this->rollBack($quarantine . '/' . $token, $moved, $member),
+                    0,
+                    $e,
+                );
             }
 
             $moved[] = new StoredObjectId($member);
@@ -576,10 +628,11 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
     }
 
     /**
-     * One shallow listing of the prefix for the tokens, then one deep listing
-     * per entry yielded. The tokens are sorted here, not trusted to the
-     * adapter's order: the quarantine holds a handful of entries between runs,
-     * not a bucket's worth.
+     * One shallow listing of the prefix per pass, continued across pages the
+     * way {@see objects()} is, then one deep listing per entry yielded. An
+     * orphan sweep leaves one entry per object, so the tokens are not "a
+     * handful" (review 1.0 #8): re-listing them all for every page was
+     * quadratic in the size of the sweep.
      */
     #[Override]
     public function quarantined(
@@ -588,45 +641,13 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
     ): iterable {
         $quarantine = $this->requireQuarantine();
 
-        try {
-            $tokens = [];
-            foreach ($this->filesystem->listContents($quarantine, false) as $attributes) {
-                // DirectoryAttributes trims slashes itself, so an adapter that
-                // reports `prefix/token/` still yields the bare token.
-                $token = substr($attributes->path(), \strlen($quarantine) + 1);
-                if (
-                    $attributes->isDir()
-                    && QuarantinedObject::isToken($token)
-                    && ($afterToken === null || strcmp($token, $afterToken) > 0)
-                ) {
-                    $tokens[] = $token;
-                }
-            }
-            sort($tokens, SORT_STRING);
-
-            $yielded = 0;
-            foreach ($tokens as $token) {
-                $base = $quarantine . '/' . $token . '/';
-                $objects = [];
-                foreach ($this->filesystem->listContents($base, true) as $attributes) {
-                    if ($attributes instanceof FileAttributes) {
-                        $objects[] = new StoredObjectId(substr($attributes->path(), \strlen($base)));
-                    }
-                }
-
-                if ($objects === []) {
-                    continue;
-                }
-
-                yield new QuarantinedObject($token, $objects);
-
-                if (++$yielded >= $limit) {
-                    return;
-                }
-            }
-        } catch (FilesystemException $e) {
-            throw new StoreException("Could not list the quarantine of store \"{$this->name}\"", 0, $e);
-        }
+        return $this->page(
+            $this->quarantineListing,
+            $afterToken,
+            $limit,
+            fn(?string $after): Iterator => $this->quarantineEntries($quarantine, $after),
+            "Could not list the quarantine of store \"{$this->name}\"",
+        );
     }
 
     /**
@@ -643,6 +664,337 @@ final readonly class FlysystemStore implements StoreUrlProviderInterface, Mainte
 
         return "Store \"{$this->name}\" has no quarantine prefix, so filestorage:gc cannot delete from it. "
             . 'Pass quarantinePrefix: a private prefix such as ".quarantine", excluded from any public read policy';
+    }
+
+    /**
+     * Where a listing of this entry resumes. A concrete union, not the
+     * template of page(): psalm 7.0 (the prefer-lowest job) does not narrow a
+     * template by instanceof.
+     *
+     * @return non-empty-string
+     */
+    private static function cursorKey(StoredObject|QuarantinedObject $entry): string
+    {
+        return $entry instanceof StoredObject ? $entry->id->relativePath : $entry->token;
+    }
+
+    /**
+     * Serves one page from a listing, continuing the parked one when the
+     * cursor is where it stopped.
+     *
+     * The listing is driven by hand — `valid()`, `current()`, `next()` —
+     * because a generator cannot be rewound, and a `foreach` would try.
+     *
+     * @template T of StoredObject|QuarantinedObject
+     *
+     * @param Continuation<T> $continuation
+     * @param \Closure(?string): Iterator<int, T> $start
+     *
+     * @return Generator<int, T>
+     *
+     * @throws StoreException
+     */
+    private function page(
+        Continuation $continuation,
+        ?string $after,
+        int $limit,
+        \Closure $start,
+        string $failure,
+    ): Generator {
+        try {
+            $entries = $continuation->resume($after) ?? $start($after);
+            $yielded = 0;
+
+            while ($entries->valid()) {
+                $entry = $entries->current();
+                \assert($entry !== null);
+                $key = self::cursorKey($entry);
+                $continuation->park($entries, $key);
+
+                yield $entry;
+
+                if (++$yielded >= $limit) {
+                    return;
+                }
+
+                if ($continuation->holds($entries)) {
+                    $entries->next();
+                } else {
+                    // Another page of this store took or replaced the parked
+                    // listing while this one was suspended. Sharing one
+                    // iterator would make each skip the other's entries.
+                    $entries = $start($key);
+                }
+            }
+            // An exhausted listing stays parked: the caller's next page, from
+            // this page's last key, answers "nothing more" without listing
+            // the store again, and is then forgotten.
+        } catch (FilesystemException $e) {
+            $continuation->clear();
+
+            throw new StoreException($failure, 0, $e);
+        } catch (StoreException $e) {
+            $continuation->clear();
+
+            throw $e;
+        }
+    }
+
+    /**
+     * Every object after the cursor, in `strcmp` order.
+     *
+     * @return Generator<int, StoredObject, mixed, void>
+     *
+     * @throws FilesystemException
+     * @throws StoreException
+     */
+    private function inventory(?string $after): Generator
+    {
+        $listing = $this->filesystem->listContents('', true);
+
+        if ($this->orderedListing) {
+            $previous = null;
+            foreach ($listing as $attributes) {
+                if (!$attributes instanceof FileAttributes) {
+                    continue;
+                }
+
+                $path = $attributes->path();
+                $this->assertAscending($previous, $path);
+                $previous = $path;
+
+                if ($this->listable($path) && ($after === null || strcmp($path, $after) > 0)) {
+                    yield $this->storedObject($path, $attributes->lastModified(), $attributes->fileSize());
+                }
+            }
+
+            return;
+        }
+
+        // Not sortByPath(): that keeps whole FileAttributes objects. A path,
+        // a timestamp and a size are all a page needs.
+        /** @var list<array{string, int|null, int|null}> $entries */
+        $entries = [];
+        foreach ($listing as $attributes) {
+            if (!$attributes instanceof FileAttributes) {
+                continue;
+            }
+
+            $path = $attributes->path();
+            if ($this->listable($path) && ($after === null || strcmp($path, $after) > 0)) {
+                $entries[] = [$path, $attributes->lastModified(), $attributes->fileSize()];
+            }
+        }
+        unset($listing);
+
+        usort(
+            $entries,
+            /**
+             * @param array{string, int|null, int|null} $a
+             * @param array{string, int|null, int|null} $b
+             */
+            static fn(array $a, array $b): int => strcmp($a[0], $b[0]),
+        );
+
+        foreach ($entries as [$path, $modified, $size]) {
+            yield $this->storedObject($path, $modified, $size);
+        }
+    }
+
+    /**
+     * Every quarantine entry after the cursor, in token order, skipping
+     * entries already emptied.
+     *
+     * @return Generator<int, QuarantinedObject, mixed, void>
+     *
+     * @throws FilesystemException
+     * @throws StoreException
+     */
+    private function quarantineEntries(string $quarantine, ?string $after): Generator
+    {
+        $tokens = $this->quarantineTokens($quarantine, $after);
+        if (!$this->orderedListing) {
+            $tokens = iterator_to_array($tokens, preserve_keys: false);
+            sort($tokens, SORT_STRING);
+        }
+
+        foreach ($tokens as $token) {
+            $base = $quarantine . '/' . $token . '/';
+            $objects = [];
+            foreach ($this->filesystem->listContents($base, true) as $attributes) {
+                if ($attributes instanceof FileAttributes) {
+                    $objects[] = new StoredObjectId(substr($attributes->path(), \strlen($base)));
+                }
+            }
+
+            if ($objects !== []) {
+                yield new QuarantinedObject($token, $objects);
+            }
+        }
+    }
+
+    /**
+     * The entry tokens after the cursor, as the adapter lists them — streamed,
+     * so under `orderedListing` the quarantine pass holds no token list in
+     * memory either (review 1.0 pass 2, N14).
+     *
+     * @return Generator<int, string, mixed, void>
+     *
+     * @throws FilesystemException
+     * @throws StoreException
+     */
+    private function quarantineTokens(string $quarantine, ?string $after): Generator
+    {
+        $previous = null;
+        foreach ($this->filesystem->listContents($quarantine, false) as $attributes) {
+            if (!$attributes->isDir()) {
+                continue;
+            }
+
+            // DirectoryAttributes trims slashes itself, so an adapter that
+            // reports `prefix/token/` still yields the bare token.
+            $token = substr($attributes->path(), \strlen($quarantine) + 1);
+            if ($this->orderedListing) {
+                $this->assertAscending($previous, $token);
+                $previous = $token;
+            }
+
+            if (QuarantinedObject::isToken($token) && ($after === null || strcmp($token, $after) > 0)) {
+                yield $token;
+            }
+        }
+    }
+
+    /**
+     * @throws StoreException
+     */
+    private function assertAscending(?string $previous, string $current): void
+    {
+        if ($previous !== null && strcmp($current, $previous) <= 0) {
+            throw new StoreException(
+                "Store \"{$this->name}\" was declared with orderedListing, but its adapter does not list in strcmp "
+                . "order: \"{$current}\" after \"{$previous}\". Paging on would skip objects; construct the store "
+                . 'without orderedListing',
+            );
+        }
+    }
+
+    /**
+     * Neither the quarantine nor a hidden path (a segment starting with `.`).
+     */
+    private function listable(string $path): bool
+    {
+        return !$this->isQuarantined($path)
+            && !str_starts_with($path, '.')
+            && !str_contains($path, '/.');
+    }
+
+    /**
+     * Both come with the listing (S3's ListObjectsV2 carries LastModified and
+     * Size), so this costs no request per object. An adapter that leaves the
+     * timestamp out gets null, and the orphan sweep never deletes an undated
+     * object.
+     */
+    private function storedObject(string $path, ?int $modified, ?int $size): StoredObject
+    {
+        return new StoredObject(
+            id: new StoredObjectId($path),
+            lastModified: $modified === null ? null : new DateTimeImmutable('@' . $modified),
+            size: $size,
+        );
+    }
+
+    /**
+     * Puts already moved members back after a failed quarantine.
+     *
+     * @param list<StoredObjectId> $moved
+     * @param string $failed The member whose move failed. On S3 a move is a
+     *        copy and a delete, so a failed delete leaves a copy of it in
+     *        the entry while the original stays in place.
+     *
+     * @return string Appended to the failure message: what moved back, what
+     *         could not, and what else the entry still holds.
+     */
+    private function rollBack(string $entry, array $moved, string $failed): string
+    {
+        $stuck = [];
+        foreach ($moved as $object) {
+            $target = $object->relativePath;
+
+            try {
+                if ($this->filesystem->fileExists($target)) {
+                    $stuck[] = $target;
+
+                    continue;
+                }
+
+                $this->filesystem->move(
+                    $entry . '/' . $target,
+                    $target,
+                    [Config::OPTION_RETAIN_VISIBILITY => false],
+                );
+            } catch (FilesystemException) {
+                $stuck[] = $target;
+            }
+        }
+
+        if ($stuck !== []) {
+            // The entry stays, and the message names everything in it
+            // (review 1.0 pass 2, N12).
+            try {
+                $copy = $this->filesystem->fileExists($entry . '/' . $failed);
+            } catch (FilesystemException) {
+                $copy = false;
+            }
+
+            return '; left in the quarantine, restored by gc while a row references them: ' . implode(', ', $stuck)
+                . ($copy ? "; the entry also holds a copy of {$failed}, whose original is in place" : '');
+        }
+
+        try {
+            // A partial copy of the failed member goes with it.
+            $this->filesystem->deleteDirectory($entry);
+        } catch (FilesystemException) {
+            // Empty after the moves back; quarantined() skips an empty entry.
+        }
+
+        if ($moved === []) {
+            return '; nothing was moved';
+        }
+
+        return '; moved back: ' . implode(', ', array_map(
+            static fn(StoredObjectId $object): string => $object->relativePath,
+            $moved,
+        ));
+    }
+
+    /**
+     * `ContentType` is the S3 adapter's key (others ignore it): the stored
+     * object's type then comes from the detected media type, not from
+     * Flysystem guessing again by extension or content — it is what a public
+     * URL serves (review 1.0 #15).
+     *
+     * Except for a scriptable type ({@see ActiveMediaTypes::scriptable()}):
+     * core's `ExtensionMap` gives those the inert `.bin` key precisely so a
+     * public bucket serves them as `application/octet-stream`, and storing
+     * `image/svg+xml` would put the stored XSS back by path. Those are left to
+     * the adapter, which types them by the key's extension — `.bin`, or the
+     * extension an application deliberately mapped back.
+     *
+     * @return array<string, string>
+     */
+    private function writeConfig(?string $mediaType): array
+    {
+        // Whole or not at all: a malformed type (CR/LF included) is left to
+        // the adapter's default rather than stripped into another token
+        // (review 1.0 pass 2, N4).
+        $mediaType = WellFormedMediaType::of($mediaType);
+
+        if ($mediaType === null || ActiveMediaTypes::scriptable()->contains($mediaType)) {
+            return [];
+        }
+
+        return ['ContentType' => $mediaType];
     }
 
     /**

@@ -5,7 +5,7 @@
 # a missing bind-mount source is created by the Docker daemon, owned by root.
 # `$(shell)` keeps DOCKER a single command that composes in any recipe.
 DOCKER := $(shell mkdir -p "$(HOME)/.composer-docker")docker run --rm -v "$(PWD)":/app -w /app -v "$(HOME)/.composer-docker":/composer-home -e COMPOSER_HOME=/composer-home composer:2
-# The integration suite talks to MinIO on the host's 127.0.0.1:9000, which is
+# The integration suite talks to SeaweedFS on the host's 127.0.0.1:8333, which is
 # not the container's. Stops before the image name so the target can append -e
 # flags, which docker only accepts ahead of it.
 DOCKER_NET := docker run --rm --network host -v "$(PWD)":/app -w /app
@@ -38,7 +38,7 @@ test:
 
 test-integration:
 	$(DOCKER_NET) \
-	  -e FILESTORAGE_S3_ENDPOINT="$${FILESTORAGE_S3_ENDPOINT:-http://127.0.0.1:9000}" \
+	  -e FILESTORAGE_S3_ENDPOINT="$${FILESTORAGE_S3_ENDPOINT:-http://127.0.0.1:8333}" \
 	  -e FILESTORAGE_S3_KEY="$${FILESTORAGE_S3_KEY:-minioadmin}" \
 	  -e FILESTORAGE_S3_SECRET="$${FILESTORAGE_S3_SECRET:-minioadmin}" \
 	  -e FILESTORAGE_S3_BUCKET="$${FILESTORAGE_S3_BUCKET:-filestorage-test}" \

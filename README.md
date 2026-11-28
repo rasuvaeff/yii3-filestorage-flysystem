@@ -24,7 +24,7 @@ against it.
 
 - PHP 8.3 – 8.6
 - `league/flysystem` ^3.35.3 (v2 is not supported)
-- `rasuvaeff/yii3-filestorage` ^0.9
+- `rasuvaeff/yii3-filestorage` ^0.10
 - A PSR-17 implementation, and a Flysystem adapter of your choice
 
 ## Installation
@@ -62,17 +62,31 @@ return [
         // where filestorage:gc parks objects before purging or restoring them;
         // null (the default) means gc cannot delete from this store
         'quarantinePrefix' => '.quarantine',
+        // true for S3 and S3-compatible services, GCS, Azure: the inventory is
+        // streamed instead of sorted once per gc pass; see "Listing order"
+        'orderedListing' => true,
+        // true when the bucket serves objects without credentials; only
+        // filestorage:check reads it, see "Public bucket"
+        'publicBucket' => false,
     ],
 ];
 ```
+
+The wiring checks the bound `PathGeneratorInterface` (core binds
+`RandomPathGenerator`) against the layout when the store is built: a generator
+that emits flat keys (`group/ab/cd/<name>.jpg`) under the default
+`DirectoryLayout` would make deleting one file delete its neighbours, so it
+fails at boot with `InvalidConfigException` instead. Bind
+`ObjectLayoutInterface` to `FlatSiblingLayout` for such keys.
 
 ## What it does and does not claim
 
 | Capability | Status |
 |---|---|
 | `StoreInterface` | Always. Write, read, stream, delete, exists, size, last-modified |
-| `MaintenanceStoreInterface` | Always. Cursor-based inventory with timestamps, idempotent object deletion and a quarantine, for `gc` / `verify` / `stat` |
+| `MaintenanceStoreInterface` | Always. Cursor-based inventory with timestamps — one listing per `gc` pass — and a quarantine, for `gc` / `verify` / `stat` |
 | `StoreUrlProviderInterface` | Always implemented, **nullable in result**. A public or presigned URL when the adapter can mint one, `null` when it cannot |
+| `PubliclyReadableStoreInterface` | Always, **answers the `publicBucket` flag** (default `false`) — see [Public bucket](#public-bucket) |
 | `RangeReadableStoreInterface` | **Never** — see below |
 | `ContentAddressableStoreInterface` | Only via `FlysystemContentAddressableStore`, and only with an explicit `AdapterSemantics` |
 
@@ -101,18 +115,61 @@ $store = new FlysystemStore(
     streamFactory: $streamFactory,
     quarantinePrefix: '.quarantine',
     layout: new FlatSiblingLayout(), // default: DirectoryLayout
+    orderedListing: true,            // S3, GCS, Azure; see "Listing order"
 );
 ```
 
 | Piece | Behaviour |
 |---|---|
 | `layout()` | `DirectoryLayout` unless configured. Chosen once per store: switching it on existing data orphans every derivative |
-| `delete(File)` | `DirectoryLayout`: the key directory prefix, derivatives included. `FlatSiblingLayout`: `<base>.<ext>` and `<base>-*` in the same directory, found with one shallow listing |
-| `objects()` | `StoredObject` with `lastModified` and `size` from the listing itself (S3 `ListObjectsV2`), no request per object. An adapter that omits the timestamp yields null, and `gc` never sweeps such an object. The quarantine prefix is never listed |
-| `quarantine()` | `move()` to `<prefix>/<token>/<path>` with private visibility — Flysystem's S3 copy would otherwise carry a public ACL into the quarantine |
+| `delete(File)` | `DirectoryLayout`: the key directory prefix, derivatives included. `FlatSiblingLayout`: `<base>.<ext>` and `<base>-*` in the same directory, found with one shallow listing. A path the layout refuses — a flat key such as `blobs/ab/cd/<sha>.jpg` under `DirectoryLayout`, whose directory is every neighbour's too — is a `StoreException`, and nothing is deleted |
+| `objects()` | `StoredObject` with `lastModified` and `size` from the listing itself (S3 `ListObjectsV2`), no request per object. An adapter that omits the timestamp yields null, and `gc` never sweeps such an object. Never lists the quarantine prefix, nor a path with a segment starting with `.` (`.keep`, `.well-known/`) — no generator emits one |
+| `quarantine()` | `move()` to `<prefix>/<token>/<path>` with private visibility — Flysystem's S3 copy would otherwise carry a public ACL into the quarantine. A move that fails puts the members already moved back first (they get the default visibility, like a restore) and the exception says so (`moved back: …`, or `nothing was moved`); one that cannot go back stays under the entry, named in the exception together with a partial copy of the failed member when S3's copy-then-delete left one (its original is in place), and the next `gc` restores it while a row references it. That the copy into the quarantine carries `ACL: private` is checked against the real `AwsS3V3Adapter` in the unit suite (SeaweedFS in CI has no object ACLs) |
 | `restore()` | Put-if-absent per object: a key re-published meanwhile is kept. A `fileExists()` then `move()`, and on S3 a move is a copy plus a delete: **not atomic**. Correct for what `gc` restores — content-addressed keys, where a racing writer published the same bytes. A restored object gets the filesystem's default visibility, like a fresh write |
 | `purge()` / `quarantined()` | Delete an entry; list entries in token (time) order |
 | `quarantineProblem()` | A message when no prefix is configured — `gc` then refuses to delete from the store |
+
+### Listing order
+
+`gc` pages through `objects($after, 500)` and `quarantined($after, 500)`. A
+page that starts where the previous one ended continues the same listing, so a
+whole pass costs **one** listing of the bucket (one `ListObjectsV2` per 1000
+keys), not one per page; any other cursor — a run resumed with `--after`, a new
+process — starts a fresh listing and skips forward.
+
+| `orderedListing` | Inventory | Quarantine entries | Memory |
+|---|---|---|---|
+| `false` (default) | One deep listing per pass, sorted once | Tokens listed and sorted once | Proportional to the bucket, once per pass |
+| `true` | One deep listing per pass, streamed | Tokens streamed | Constant (one entry's member list at a time) |
+
+**Resuming in a new process is not free.** Flysystem 3 exposes no
+`StartAfter`, so a run that resumes from a cursor lists the bucket from its
+start up to the cursor before its first new key. A full pass split into `k`
+runs of `--max-scan m` pulls about `k²·m/2` entries: 1 M keys in runs of 10 000
+is ~50 M entries (~50 000 `ListObjectsV2` calls) instead of 1 M. Bound it by
+running a pass in **one process** where you can (`gc` without `--max-scan`, or
+a `--max-scan` large enough for few runs); `--limit`/`--max-scan` are for
+spreading I/O, not for cheap checkpoints. Within one process the listing is
+continued, not restarted.
+
+**A parked listing expires.** Between two pages the store keeps the adapter's
+iterator. One not continued within an hour is dropped on the next call and
+the listing starts fresh — a long-lived worker (a queue consumer running `gc`
+as a service) does not continue a snapshot hours old and miss what was written
+since. A call with no cursor (a new pass) drops it too. Until then the parked
+listing holds its memory (without `orderedListing`, the sorted inventory).
+
+Declare `true` only for an adapter that lists keys in `strcmp` (byte) order:
+S3 general-purpose buckets and S3-compatible services, GCS, Azure — not a local
+or FTP adapter, and not an S3 Express One Zone *directory* bucket, which does
+not promise lexicographic order. A wrong
+`true` cannot lose objects silently: every consecutive pair is compared, and the
+first key out of order ends the pass with a `StoreException`
+(`… does not list in strcmp order …`).
+
+The bucket belongs to the store. Anything under it that is not a store object —
+another application's files — is inventory to `gc --orphans`; give the store a
+bucket of its own, or a prefix of one (`AwsS3V3Adapter`'s `$prefix` argument).
 
 **The quarantine prefix.** A path whose first segment starts with `.` or `_`
 (`.quarantine`, `_trash/gc`). Group and scope names start with a letter or digit,
@@ -149,6 +206,69 @@ emitted per RFC 6266: a quote-safe ASCII fallback plus a percent-encoded
 `filename*`. For an adapter with no equivalent, write your own mapper or leave
 it unbound.
 
+**Active content is never signed `inline`.** An S3 response cannot carry
+`X-Content-Type-Options: nosniff`, so an uploaded SVG or HTML file served inline
+from a bucket on your domain is stored XSS. Every type in core's
+`Mime\ActiveMediaTypes` (HTML, SVG, XML and any `*/*+xml`, script, PDF, …) is
+signed as `attachment` whatever the group's policy says.
+
+The list is core's one configured instance, the same the `-web` proxy and
+`filestorage:check` use. You configure it in core's params, and the binding
+above autowires it into `S3TemporaryUrlOptions` (core binds
+`ActiveMediaTypes::class`):
+
+```php
+'rasuvaeff/yii3-filestorage' => [
+    'activeMediaTypes' => [
+        'extra' => ['application/x-custom-script'], // forced to attachment everywhere
+        'allowInline' => ['application/pdf'],       // an inline group may show PDFs, presigned too
+    ],
+],
+```
+
+The constructor takes the list and has no default: core's default keeps PDF
+forced and knows none of your extras, so a hand-built
+`new S3TemporaryUrlOptions()` used to drop the PDF opt-out silently. Writing
+the binding as a closure, ask for the instance —
+`static fn (ActiveMediaTypes $types) => new S3TemporaryUrlOptions($types)` —
+never build a second list. (Up to 0.4 this README built it from `-web`'s
+`extraActiveMediaTypes` param; `-web` 0.7 removed that param and refuses it at
+boot.)
+
+A stored media type that is not RFC 9110 grammar (`type/subtype`, optional
+`; name=value` parameters, ASCII) — a CR or LF in it included — is signed as
+`application/octet-stream`, as an attachment. It is not cleaned: stripping
+CR/LF from `image/svg+xml\r\nX: y` glued `image/svg+xmlX: y`, a type in no
+list that no browser parses, and S3 cannot add `nosniff`. `write()` also stores the
+detected media type as the object's `ContentType`, which is what a public URL
+serves (a malformed one is not stored at all) — except a scriptable type (HTML, SVG, XML, script): core gives those
+the inert `.bin` key, and the object keeps the type of that key,
+`application/octet-stream`, so a public bucket serves it as a download.
+`putIfAbsent()` takes no media type and leaves it to the adapter.
+
+### Public bucket
+
+If the bucket (or a CDN in front of it) serves objects without credentials,
+every object is reachable by path whatever `allowDirectPublicUrl` says, and a
+public URL cannot force a download. Say so with `publicBucket`:
+
+```php
+new FlysystemStore('flysystem', $filesystem, $streams, publicBucket: true);
+// or, through the package's DI: params ['rasuvaeff/yii3-filestorage-flysystem']['publicBucket' => true]
+```
+
+Both stores then implement core's `PubliclyReadableStoreInterface` with
+`isPubliclyReadable(): true` (`FlysystemContentAddressableStore` answers for the
+store it wraps), and `filestorage:check` treats the store as public: it lists
+the `public` capability and **fails every group that accepts active content**
+(HTML, SVG, XML, script) — groups are not bound to stores, so each one could
+land in the bucket. Keep such types out of `allowedMimeTypes` of every group.
+
+The flag is your statement, not something the store probes: `publicUrl()`
+answering is no evidence, because the S3 adapter builds an object URL for a
+private bucket too. It changes nothing else — no URL, no visibility on write.
+The default `false` leaves a public bucket invisible to `check`.
+
 ## Deduplication
 
 Sharing one object between two logical files is only safe if publishing is
@@ -160,6 +280,7 @@ without both:
 ```php
 use League\Flysystem\FilesystemOperator;
 use Psr\Http\Message\StreamFactoryInterface;
+use Rasuvaeff\Yii3Filestorage\Mime\ActiveMediaTypes;
 use Rasuvaeff\Yii3Filestorage\Store\StoreInterface;
 use Rasuvaeff\Yii3FilestorageFlysystem\AdapterSemantics;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemContentAddressableStore;
@@ -170,9 +291,16 @@ return [
     StoreInterface::class => static fn (
         FilesystemOperator $filesystem,
         StreamFactoryInterface $streams,
+        ActiveMediaTypes $activeTypes, // core's configured list
     ): StoreInterface => new FlysystemContentAddressableStore(
-        store: new FlysystemStore('s3', $filesystem, $streams, new S3TemporaryUrlOptions()),
-        filesystem: $filesystem,
+        store: new FlysystemStore(
+            name: 's3',
+            filesystem: $filesystem,
+            streamFactory: $streams,
+            temporaryUrlOptions: new S3TemporaryUrlOptions($activeTypes),
+            quarantinePrefix: '.quarantine', // without one gc cannot collect blobs
+            orderedListing: true,
+        ),
         semantics: AdapterSemantics::guaranteed(),
     ),
 ];
@@ -182,6 +310,10 @@ return [
 |---|---|
 | `atomicVisibility` | A reader never sees a partially uploaded body. True for S3 and S3-compatible services; false for a plain FTP/SFTP adapter writing in place |
 | `immutableContentKeys` | Nothing but this package writes under the content-addressed prefix, and a key is never rewritten with different bytes |
+
+The wrapper uses the wrapped store's own `FilesystemOperator`, so the two cannot
+differ. The content-addressed key generator is checked against the store's
+layout where they meet — in `-db`'s deduplication factory — not here.
 
 There is no permissive default. An installation that cannot promise both keeps
 the plain `FlysystemStore` binding and stays unique-only — fully functional,
@@ -209,12 +341,17 @@ A remote `PUT` cannot be aborted halfway, so the group's `maxBytes` is enforced
 in two places instead of during the copy: a known-oversized upload is refused
 before any I/O, and the stored object's actual size is verified afterwards and
 the object removed if the body under-reported. `Upload` has already bounded the
-body once, when it spooled a non-seekable stream.
+body once, when it spooled a non-seekable stream. Either refusal is core's
+`UploadSizeException` (catch `SizeLimitExceededException` for a 413).
+
+`putIfAbsent()` checks the same way but does **not** remove an over-cap object
+it wrote: another writer may already reference that content key. The ledger's
+grace period and the collector reclaim it if nothing commits against it.
 
 ## Examples
 
 Runnable and self-contained — see [`examples/`](examples/). The S3 one needs an
-endpoint; MinIO in Docker is enough.
+endpoint; SeaweedFS in Docker is enough.
 
 ## Development
 
@@ -222,29 +359,32 @@ No PHP or Composer on the host; everything runs in Docker.
 
 ```bash
 make build             # validate, normalize, require-checker, cs, psalm, test
-make test-integration  # against a real S3 endpoint; needs MinIO reachable
+make test-integration  # against a real S3 endpoint; needs SeaweedFS reachable
 make cs-fix
 make mutation
 make release-check
 ```
 
-MinIO for the integration suite:
+SeaweedFS for the integration suite (MinIO's images were deleted from Docker Hub
+and quay.io now requires authentication):
 
 ```bash
-docker run -d --name minio -p 9000:9000 \
-  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-  quay.io/minio/minio server /data
-until curl -fs http://127.0.0.1:9000/minio/health/live >/dev/null; do sleep 1; done
+docker run -d --name weed -p 8333:8333 \
+  chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d \
+  server -dir=/data -s3
+until curl -fs http://127.0.0.1:8333/ >/dev/null; do sleep 1; done
 make test-integration
 ```
 
 `make test-integration` supplies `FILESTORAGE_S3_ENDPOINT`, `_KEY`, `_SECRET`
 and `_BUCKET` itself, defaulting to that container, so it never skips: with no
-MinIO reachable the S3 client fails to connect and Testo reports the affected
+gateway reachable the S3 client fails to connect and Testo reports the affected
 tests **aborted**. A bare `composer test:integration` with no
 `FILESTORAGE_S3_ENDPOINT` set reports them **skipped** instead. Neither is a
-passing run — check the word, not the colour: `5 passed` means MinIO was really
-reached, `5 skipped` means nothing was tested.
+passing run — check the word, not the colour: `passed` means the gateway was
+really reached, `skipped` means nothing was tested. One test,
+`aQuarantinedObjectIsPrivate`, skips by itself on SeaweedFS, which reports no
+object ACLs; it runs against AWS or MinIO.
 
 ## License
 

@@ -10,7 +10,7 @@ use League\Flysystem\FilesystemOperator;
 use Override;
 use Psr\Http\Message\StreamInterface;
 use Rasuvaeff\Yii3Filestorage\Exception\StoreException;
-use Rasuvaeff\Yii3Filestorage\Exception\UploadTooLargeException;
+use Rasuvaeff\Yii3Filestorage\Exception\UploadSizeException;
 use Rasuvaeff\Yii3Filestorage\File;
 use Rasuvaeff\Yii3Filestorage\Path\PathGeneratorInterface;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryOptions;
@@ -18,6 +18,7 @@ use Rasuvaeff\Yii3Filestorage\Store\ContentAddressableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectLayoutInterface;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectSet;
 use Rasuvaeff\Yii3Filestorage\Store\MaintenanceStoreInterface;
+use Rasuvaeff\Yii3Filestorage\Store\PubliclyReadableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\QuarantinedObject;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
 use Rasuvaeff\Yii3Filestorage\Store\StoreResult;
@@ -45,15 +46,23 @@ use Rasuvaeff\Yii3FilestorageFlysystem\Stream\StreamWrapper;
 final readonly class FlysystemContentAddressableStore implements
     ContentAddressableStoreInterface,
     MaintenanceStoreInterface,
-    StoreUrlProviderInterface
+    StoreUrlProviderInterface,
+    PubliclyReadableStoreInterface
 {
     private const int MEASURE_CHUNK = 262_144;
 
+    private FilesystemOperator $filesystem;
+
+    /**
+     * The operator is the wrapped store's own: a second one could differ, and
+     * writes would land where reads and deletes never look (review 1.0 #16).
+     */
     public function __construct(
         private FlysystemStore $store,
-        private FilesystemOperator $filesystem,
         private AdapterSemantics $semantics,
-    ) {}
+    ) {
+        $this->filesystem = $store->filesystem();
+    }
 
     /**
      * Counts an upload that does not report its own length.
@@ -113,7 +122,7 @@ final readonly class FlysystemContentAddressableStore implements
         }
 
         if ($maxBytes > 0 && $declared !== null && $declared > $maxBytes) {
-            throw new UploadTooLargeException(
+            throw new UploadSizeException(
                 "Upload of {$declared} bytes exceeds the {$maxBytes} byte limit",
             );
         }
@@ -143,7 +152,7 @@ final readonly class FlysystemContentAddressableStore implements
                     // how the bytes got there. Reusing past it would let a
                     // group's limit be bypassed by anything that uploaded the
                     // same content under a laxer one.
-                    throw new UploadTooLargeException(
+                    throw new UploadSizeException(
                         "Upload of {$existing} bytes exceeds the {$maxBytes} byte limit",
                     );
                 }
@@ -167,7 +176,7 @@ final readonly class FlysystemContentAddressableStore implements
             // writer that got here first, so removing it is not ours to do. The
             // ledger's grace period and collection pass reclaim it if nothing
             // commits against it.
-            throw new UploadTooLargeException(
+            throw new UploadSizeException(
                 "Upload of {$written} bytes exceeds the {$maxBytes} byte limit",
             );
         }
@@ -205,6 +214,15 @@ final readonly class FlysystemContentAddressableStore implements
     public function layout(): ObjectLayoutInterface
     {
         return $this->store->layout();
+    }
+
+    /**
+     * The wrapped store's answer: deduplicated blobs live in the same bucket.
+     */
+    #[Override]
+    public function isPubliclyReadable(): bool
+    {
+        return $this->store->isPubliclyReadable();
     }
 
     #[Override]
@@ -255,12 +273,6 @@ final readonly class FlysystemContentAddressableStore implements
         int $limit = 1000,
     ): iterable {
         return $this->store->objects($afterPath, $limit);
-    }
-
-    #[Override]
-    public function deleteObject(StoredObjectId $object): void
-    {
-        $this->store->deleteObject($object);
     }
 
     #[Override]

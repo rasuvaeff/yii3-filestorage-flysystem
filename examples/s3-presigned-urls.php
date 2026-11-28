@@ -7,6 +7,7 @@ use League\Flysystem\AwsS3V3\AwsS3V3Adapter;
 use League\Flysystem\Filesystem;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Rasuvaeff\Yii3Filestorage\File;
+use Rasuvaeff\Yii3Filestorage\Mime\ActiveMediaTypes;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryOptions;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicy;
@@ -31,7 +32,7 @@ $client = new S3Client([
     'version' => 'latest',
     'region' => (string) (getenv('FILESTORAGE_S3_REGION') ?: 'us-east-1'),
     'endpoint' => $endpoint,
-    // MinIO addresses buckets as path segments, not as subdomains
+    // S3 gateways (SeaweedFS, MinIO) address buckets as path segments, not as subdomains
     'use_path_style_endpoint' => true,
     'credentials' => [
         'key' => (string) (getenv('FILESTORAGE_S3_KEY') ?: 'minioadmin'),
@@ -49,7 +50,9 @@ $store = new FlysystemStore(
     name: 's3',
     filesystem: $filesystem,
     streamFactory: $factory,
-    temporaryUrlOptions: new S3TemporaryUrlOptions(),
+    // Core's default list here; in an application autowire it instead —
+    // core binds the instance configured by its activeMediaTypes param.
+    temporaryUrlOptions: new S3TemporaryUrlOptions(new ActiveMediaTypes()),
 );
 
 $result = $store->write(
@@ -95,7 +98,6 @@ echo "body:     {$body}\n\n";
 // Deduplication, against an adapter whose semantics the application declares.
 $dedup = new FlysystemContentAddressableStore(
     store: $store,
-    filesystem: $filesystem,
     semantics: AdapterSemantics::guaranteed(),
 );
 
@@ -109,5 +111,5 @@ echo "first put created:  " . ($first->created ? 'yes' : 'no') . "\n";
 echo "second put created: " . ($second->created ? 'yes' : 'no') . " (reused, so the ledger adds a reference)\n";
 
 $store->delete($file);
-$dedup->deleteObject($key);
+$filesystem->delete($key->relativePath);
 echo "cleaned up\n";

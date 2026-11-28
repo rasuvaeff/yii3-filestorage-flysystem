@@ -10,7 +10,6 @@ use League\Flysystem\Config;
 use League\Flysystem\DirectoryListing;
 use League\Flysystem\Filesystem;
 use League\Flysystem\FilesystemOperator;
-use League\Flysystem\StorageAttributes;
 use League\Flysystem\UnableToCheckExistence;
 use League\Flysystem\UnableToDeleteDirectory;
 use League\Flysystem\UnableToDeleteFile;
@@ -25,16 +24,16 @@ use Rasuvaeff\Understudy\Arg;
 use Rasuvaeff\Understudy\Invocation;
 use Rasuvaeff\Understudy\Understudy;
 use Rasuvaeff\Yii3Filestorage\Exception\StoreException;
-use Rasuvaeff\Yii3Filestorage\Exception\UploadTooLargeException;
+use Rasuvaeff\Yii3Filestorage\Exception\UploadSizeException;
+use Rasuvaeff\Yii3Filestorage\Mime\ActiveMediaTypes;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Store\ContentAddressableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\MaintenanceStoreInterface;
+use Rasuvaeff\Yii3Filestorage\Store\PubliclyReadableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\RangeReadableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\StoredObject;
-use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
 use Rasuvaeff\Yii3Filestorage\Store\StoreUrlProviderInterface;
 use Rasuvaeff\Yii3Filestorage\Upload;
-use Rasuvaeff\Yii3FilestorageFlysystem\AdapterSemantics;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemStore;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\FixedPathGenerator;
 use Rasuvaeff\Yii3FilestorageFlysystem\Tests\Support\Fixtures;
@@ -66,6 +65,23 @@ final class FlysystemStoreTest
     public function keepsTheNameItWasGiven(): void
     {
         Assert::same($this->store->name(), 'flysystem');
+    }
+
+    /**
+     * Whether a bucket is public is configuration, not a class: the store
+     * answers what it was told, and a bucket nobody declared is private.
+     */
+    public function aBucketIsNotPubliclyReadableUnlessDeclared(): void
+    {
+        Assert::instanceOf($this->store, PubliclyReadableStoreInterface::class);
+        Assert::false($this->store->isPubliclyReadable());
+    }
+
+    public function aBucketDeclaredPublicSaysSo(): void
+    {
+        $store = new FlysystemStore('flysystem', $this->filesystem, Fixtures::factory(), publicBucket: true);
+
+        Assert::true($store->isPubliclyReadable());
     }
 
     #[DataProvider('invalidNameProvider')]
@@ -144,7 +160,7 @@ final class FlysystemStoreTest
      */
     public function aKnownOversizedUploadIsRefusedBeforeAnyWrite(): void
     {
-        Expect::exception(UploadTooLargeException::class)->withMessageContaining('exceeds the 3 byte limit');
+        Expect::exception(UploadSizeException::class)->withMessageContaining('exceeds the 3 byte limit');
 
         $this->store->write(
             upload: Fixtures::upload('hello'),
@@ -158,7 +174,7 @@ final class FlysystemStoreTest
     {
         try {
             $this->store->write(Fixtures::upload('hello'), 'common', new RandomPathGenerator(), maxBytes: 3);
-        } catch (UploadTooLargeException) {
+        } catch (UploadSizeException) {
             // asserted in its own test
         }
 
@@ -182,7 +198,7 @@ final class FlysystemStoreTest
         try {
             $this->store->write($upload, 'common', new RandomPathGenerator(), maxBytes: 3);
             Assert::fail('the cap should have refused this upload');
-        } catch (UploadTooLargeException $e) {
+        } catch (UploadSizeException $e) {
             Assert::string($e->getMessage())->contains('exceeds the 3 byte limit');
         }
 
@@ -287,31 +303,16 @@ final class FlysystemStoreTest
         }
 
         $first = array_map(
-            static fn(StoredObject $o): string => $o->relativePath,
+            static fn(StoredObject $o): string => $o->id->relativePath,
             iterator_to_array($this->store->objects(limit: 2), preserve_keys: false),
         );
         $rest = array_map(
-            static fn(StoredObject $o): string => $o->relativePath,
+            static fn(StoredObject $o): string => $o->id->relativePath,
             iterator_to_array($this->store->objects(afterPath: 'g/b/original.txt'), preserve_keys: false),
         );
 
         Assert::same($first, ['g/a/original.txt', 'g/b/original.txt']);
         Assert::same($rest, ['g/c/original.txt']);
-    }
-
-    /**
-     * A retried collection pass has to converge, not fail on the second
-     * attempt at an object the first one already removed.
-     */
-    public function deleteObjectRemovesOneObjectAndIsIdempotent(): void
-    {
-        $this->filesystem->write('g/a/original.txt', 'a');
-        $object = new StoredObjectId('g/a/original.txt');
-
-        $this->store->deleteObject($object);
-        $this->store->deleteObject($object);
-
-        Assert::false($this->filesystem->fileExists('g/a/original.txt'));
     }
 
     /**
@@ -356,7 +357,7 @@ final class FlysystemStoreTest
             'flysystem',
             $this->urlCapable($generator),
             Fixtures::factory(),
-            new S3TemporaryUrlOptions(),
+            new S3TemporaryUrlOptions(new ActiveMediaTypes()),
         );
 
         $url = $store->temporaryUrl(Fixtures::file(), new DateTimeImmutable('+1 hour'), Fixtures::deliveryOptions());
@@ -385,7 +386,7 @@ final class FlysystemStoreTest
             'flysystem',
             $this->urlCapable($generator),
             Fixtures::factory(),
-            new S3TemporaryUrlOptions(),
+            new S3TemporaryUrlOptions(new ActiveMediaTypes()),
         );
 
         Assert::null($store->publicUrl(Fixtures::file()));
@@ -410,7 +411,7 @@ final class FlysystemStoreTest
             'flysystem',
             $this->urlCapable($generator),
             Fixtures::factory(),
-            new S3TemporaryUrlOptions(),
+            new S3TemporaryUrlOptions(new ActiveMediaTypes()),
         );
 
         Assert::null($store->publicUrl(Fixtures::file()));
@@ -432,7 +433,7 @@ final class FlysystemStoreTest
             'flysystem',
             $this->urlCapable($generator),
             Fixtures::factory(),
-            new S3TemporaryUrlOptions(),
+            new S3TemporaryUrlOptions(new ActiveMediaTypes()),
         );
 
         Assert::null($store->publicUrl(Fixtures::file()));
@@ -594,39 +595,48 @@ final class FlysystemStoreTest
     }
 
     /**
-     * sortByPath() is toArray() + usort(), so it materialises and orders the
-     * whole bucket before the first yield — and gc calls objects() once per
-     * page. Declaring the adapter already ordered skips that sort, so the
-     * declared store's listing must match the adapter's raw order exactly,
-     * insertion order and all; the plain store still sorts it.
+     * The detected media type is what the object is stored with — on S3 the
+     * `ContentType` a public URL serves — rather than Flysystem guessing again
+     * from the extension or the bytes (review 1.0 #15). A type that is not
+     * RFC 9110 grammar (CR/LF included) is not stored at all, and an unknown
+     * type leaves the adapter's default. A
+     * scriptable type is never stored as itself: core keys it `.bin` so a
+     * public bucket serves it as a download (core review 1.0 B5).
      */
-    public function anOrderedAdapterIsNotSortedAgain(): void
+    public function theDetectedMediaTypeIsStoredWithTheObject(): void
     {
-        foreach (['b/original.bin', 'a/original.bin', 'c/original.bin'] as $path) {
-            $this->filesystem->write($path, 'x');
+        $cases = [
+            ['image/png', ['ContentType' => 'image/png']],
+            // malformed (review 1.0 pass 2, N4): stripping CR/LF glued
+            // `image/svg+xmlX: y` together — not stored as a type at all
+            ["text/pl\r\nain", []],
+            ["image/svg+xml\r\nX: y", []],
+            ['text/plain; charset', []],
+            ['text/plain; charset=utf-8', ['ContentType' => 'text/plain; charset=utf-8']],
+            ['application/pdf', ['ContentType' => 'application/pdf']],
+            [null, []],
+            ["\n", []],
+            // scriptable: left to the key's inert `.bin`, never stored as itself
+            ['image/svg+xml', []],
+            ['Text/HTML; charset=utf-8', []],
+            // any `*/*+xml` is scriptable since core 0.10
+            ['model/vnd.collada+xml', []],
+        ];
+        foreach ($cases as [$type, $expected]) {
+            $configs = [];
+            $filesystem = Understudy::strict(Understudy::for(FilesystemOperator::class));
+            when(fn() => $filesystem->fileExists(Arg::any()))->returns(false);
+            when(fn() => $filesystem->writeStream(Arg::any(), Arg::any(), Arg::any()))
+                ->answers(static function (Invocation $call) use (&$configs): void {
+                    $configs[] = $call->args[2] ?? null;
+                });
+            when(fn() => $filesystem->fileSize(Arg::any()))->returns(5);
+            $store = new FlysystemStore('flysystem', $filesystem, Fixtures::factory());
+
+            $store->write(Fixtures::upload('hello'), 'g', new FixedPathGenerator('g/a/original.png'), $type);
+
+            Assert::same($configs, [$expected]);
         }
-
-        $declared = new FlysystemStore(
-            'flysystem',
-            $this->filesystem,
-            Fixtures::factory(),
-            semantics: AdapterSemantics::guaranteed(orderedListing: true),
-        );
-
-        $toPaths = static fn(iterable $objects): array => array_map(
-            static fn(StoredObject $id): string => $id->relativePath,
-            iterator_to_array($objects, preserve_keys: false),
-        );
-        $rawOrder = array_values(array_map(
-            static fn(StorageAttributes $a): string => $a->path(),
-            array_filter(
-                iterator_to_array($this->filesystem->listContents('', deep: true), preserve_keys: false),
-                static fn(StorageAttributes $a): bool => $a->isFile(),
-            ),
-        ));
-
-        Assert::same($toPaths($declared->objects()), $rawOrder);
-        Assert::same($toPaths($this->store->objects()), ['a/original.bin', 'b/original.bin', 'c/original.bin']);
     }
 
     /**
@@ -643,7 +653,7 @@ final class FlysystemStoreTest
             Fixtures::factory(),
         );
 
-        Expect::exception(UploadTooLargeException::class)->withMessageContaining('exceeds the 3 byte limit');
+        Expect::exception(UploadSizeException::class)->withMessageContaining('exceeds the 3 byte limit');
 
         $store->write(Fixtures::upload('hello'), 'common', new RandomPathGenerator(), maxBytes: 3);
     }
@@ -661,7 +671,7 @@ final class FlysystemStoreTest
             'flysystem',
             Understudy::strict(Understudy::for(FilesystemOperator::class)),
             Fixtures::factory(),
-            new S3TemporaryUrlOptions(),
+            new S3TemporaryUrlOptions(new ActiveMediaTypes()),
         );
 
         Assert::null($store->publicUrl(Fixtures::file()));
@@ -700,15 +710,28 @@ final class FlysystemStoreTest
         );
     }
 
-    public function aFailedObjectDeleteBecomesAStoreExceptionCarryingTheCause(): void
+    /**
+     * An over-cap object that cannot be removed again is a store failure, not
+     * a size refusal: the caller must learn that bytes were left behind.
+     */
+    public function aFailedRemovalOfAnOverCapObjectBecomesAStoreExceptionCarryingTheCause(): void
     {
         $cause = UnableToDeleteFile::atLocation('g/a/original.txt', 'denied');
         $filesystem = Understudy::strict(Understudy::for(FilesystemOperator::class));
+        when(fn() => $filesystem->fileExists(Arg::any()))->returns(false);
+        when(fn() => $filesystem->writeStream(Arg::any(), Arg::any(), Arg::any()))->returns(null);
+        when(fn() => $filesystem->fileSize(Arg::any()))->returns(5);
         when(fn() => $filesystem->delete(Arg::any()))->answers(static fn(): never => throw $cause);
         $store = new FlysystemStore('flysystem', $filesystem, Fixtures::factory());
+        $factory = Fixtures::factory();
+        $upload = \Rasuvaeff\Yii3Filestorage\Upload::fromStream(
+            new UnsizedStream($factory->createStream('hello')),
+            'a.txt',
+            $factory,
+        );
 
         $this->assertStoreFailure(
-            static fn() => $store->deleteObject(new StoredObjectId('g/a/original.txt')),
+            static fn() => $store->write($upload, 'g', new FixedPathGenerator('g/a/original.txt'), maxBytes: 3),
             'Could not delete "g/a/original.txt" from store "flysystem"',
             $cause,
         );

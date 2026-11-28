@@ -9,10 +9,12 @@ Azure, FTP, anything with an adapter. Namespace
 `Rasuvaeff\Yii3FilestorageFlysystem`.
 
 Public API: `FlysystemStore` (`StoreUrlProviderInterface` +
-`MaintenanceStoreInterface`, with layout and quarantine), `FlysystemContentAddressableStore`
-(adds `ContentAddressableStoreInterface`), `AdapterSemantics`,
+`MaintenanceStoreInterface` + `PubliclyReadableStoreInterface`, with layout and
+quarantine), `FlysystemContentAddressableStore` (adds
+`ContentAddressableStoreInterface`), `AdapterSemantics`,
 `Url\TemporaryUrlOptionsInterface` with `Url\S3TemporaryUrlOptions`.
-`Stream\StreamWrapper` is `@internal`.
+`Stream\StreamWrapper`, `Listing\Continuation` and `FlysystemStore::filesystem()`
+are `@internal`.
 
 DI wiring: `config/di.php` binds `StoreInterface` and nothing else. It must
 **not** bind `StorageInterface` (core's), `RepositoryInterface` (`-db`'s),
@@ -23,8 +25,8 @@ key.
 ## Golden rules
 
 1. **Verification is mandatory.** Never claim "done" without a fresh green
-   `make build`. For anything touching URLs, uploads or dedup, also
-   `make test-integration` against real MinIO — the in-memory adapter has no
+   `make build`. For anything touching URLs, uploads, listing or dedup, also
+   `make test-integration` against SeaweedFS — the in-memory adapter has no
    URL generator, no multipart upload and no signatures, so a green unit suite
    proves nothing about S3.
 2. **No suppressions.** No `@psalm-suppress`, no baseline. Fix the root cause.
@@ -43,7 +45,7 @@ No PHP/Composer on the host — run in Docker via the `composer:2` image.
 
 ```bash
 make build
-make test-integration   # always resolves an endpoint; needs a reachable MinIO
+make test-integration   # always resolves an endpoint; needs a reachable SeaweedFS
 make cs-fix
 make psalm
 make test
@@ -61,7 +63,8 @@ docker run -d --name weed -p 8333:8333 \
   chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d \
   server -dir=/data -s3
 until curl -fs http://127.0.0.1:8333/ >/dev/null; do sleep 1; done
-FILESTORAGE_S3_ENDPOINT=http://127.0.0.1:8333 make test-integration
+make test-integration
+docker rm -f weed
 ```
 
 The gateway runs authless without an s3 config, so the default
@@ -70,17 +73,21 @@ as-is.
 
 `make test-integration` supplies the four `FILESTORAGE_S3_*` variables itself,
 defaulting to that container, and runs with `--network host` — the suite talks
-to the host's `127.0.0.1:9000`, which is not the container's. Override any of
+to the host's `127.0.0.1:8333`, which is not the container's. Override any of
 them from the environment to point at something else. Because `make` always
-supplies an endpoint, it never skips: with no MinIO reachable there, the S3
+supplies an endpoint, it never skips: with no gateway reachable there, the S3
 client fails to connect inside `#[BeforeTest]` and Testo reports the affected
-tests **aborted**, not skipped.
+tests **aborted**, not skipped. `aQuarantinedObjectIsPrivate` skips itself on
+SeaweedFS, which reports every object as private (no ACLs). The claim is
+covered in the Unit suite instead: `S3QuarantineAclTest` drives the real
+`AwsS3V3Adapter` against a recording S3 client and asserts `ACL: private` on
+the `CopyObject` into the quarantine (review 1.0 pass 2, N17).
 
 **Skipping is a bare `composer test:integration` behaviour.** Run directly,
 without `make` and with no `FILESTORAGE_S3_*` variable set, `FlysystemStore` is
 never constructed and every test throws `SkipTest`, which Testo reports as
 **skipped**. A skipped run is not a passing run, and Testo says which is which:
-if you see `5 passed`, MinIO was really reached; if you see `5 skipped`,
+if you see `passed`, the gateway was really reached; if you see `skipped`,
 nothing was tested. Check the word before believing the colour.
 
 `composer.lock` is gitignored (library).
@@ -90,10 +97,11 @@ nothing was tested. Check the word before believing the colour.
 `minMsi` is **88**. `composer mutation` runs Infection with `--with-uncovered`
 (code the tests execute but do not name in `#[Covers]` is mutated too), so the
 number is the overall MSI: 409 of 418 counted mutants killed (about 98%, CI
-2026-11-27), with
+2026-11-27, at 0.4.0 — the 0.5 listing/rollback code has not been through a
+mutation run yet; Infection is not run locally on this machine), with
 the template's signature-default ignore and Public/ProtectedVisibility off. The
 16 ignored mutants are `type $name = default,` signature lines; the signatures
-that carry them (`objects()`, `quarantined()`, `putIfAbsent()`, `guaranteed()`) are written one
+that carry them (`objects()`, `quarantined()`, `putIfAbsent()`) are written one
 parameter per line so the ignore applies. Every fault the store distinguishes
 has a test that breaks it that specific way: missing vs. unreachable vs.
 present-but-unreadable, a declared size trusted over a re-measurement, the
@@ -107,7 +115,8 @@ skips only the re-published member, and the exact depth of every listing. The su
 | Floors and clamps | `max(0, $written)` around a size Flysystem already reports as non-negative | Guards a value the source cannot produce; removing the floor changes nothing observable |
 | A redundant `rewind()` | `measure()`'s own `$stream->rewind()` | `Upload::stream()` already rewinds on every call, so nothing downstream can ever observe whether `measure()` also did |
 | The `use_include_path` argument | `fopen(..., use_include_path: false, ...)` in `StreamWrapper::wrap()` | A custom stream-wrapper protocol never consults the include path |
-| A nullsafe property read | `$this->semantics?->orderedListing` in `objects()` | Reading a property through `->` on a null object is a PHP warning, not a fatal error, and evaluates to null either way |
+| An `\assert()` in `page()` | `\assert($entry !== null)` after `valid()` | Not compiled in CI (`zend.assertions=-1`); it exists for psalm, since `Iterator::current()` is nullable |
+| Optimisations with an equal answer | `unset($listing)` in `inventory()`; `holds()` falling back to a fresh listing | A fresh listing from the same key yields the same page, only slower |
 
 The `return null` inside each URL `catch` (`publicUrl()`, `temporaryUrl()`) is
 the same shape: falling through lands on a `$url === '' ? null : $url` over an
@@ -153,6 +162,54 @@ unassigned variable, which is also null.
   copy plus a delete). Correct only because what `gc` restores are
   content-addressed keys: a writer that won the race wrote the same bytes. Do
   not reuse it for mutable keys.
+- **One listing per `gc` pass (review 1.0 #6, #8).** `objects()` and
+  `quarantined()` park their listing in a `Listing\Continuation`; a page whose
+  cursor is the previous page's last key continues it, any other cursor starts
+  over. An exhausted listing stays parked once, so the closing empty page costs
+  nothing. `FlysystemStoreListingTest` counts adapter calls and entries — keep
+  it at one call per pass. A parked listing expires after an hour idle and is
+  dropped on a cursorless call (pass 2 N6, `ContinuationTest`). Across
+  processes a resume lists from the start (no `StartAfter` in Flysystem 3) —
+  documented cost, not a bug to "fix" with adapter internals (pass 2 N5). The
+  quarantine's tokens are streamed under `orderedListing` (pass 2 N14).
+- **`orderedListing` is verified, never trusted.** It lives on `FlysystemStore`
+  (not `AdapterSemantics`, since 0.5). With it, every consecutive pair of the
+  deep listing (and of the quarantine's shallow one) is compared and the first
+  descent is a `StoreException` — the review's probe silently lost 9014 of
+  10000 objects to a wrong flag. Never replace the exception with a fallback
+  sort: pages already yielded cannot be taken back. Without it, the listing is
+  sorted once per pass (`usort` over path/mtime/size triples).
+- **Hidden paths are never inventory.** A segment starting with `.` (`.keep`,
+  `.well-known/`) — no generator emits one (core review 1.0 B2). There is no
+  `ownedPrefixes` here: a bucket shared with other content is scoped with the
+  adapter's own prefix.
+- **The layout guards `delete()`.** Core 0.10's `DirectoryLayout` refuses a flat
+  key; `delete()` rethrows that as `StoreException` (so `-web` answers 404) and
+  deletes nothing. DI checks the bound `PathGeneratorInterface` with
+  `LayoutCompatibility::assertPaths()`; content keys are `-db`'s to check.
+- **`quarantine()` rolls back.** A failed move puts already moved members back
+  (`retain_visibility: false`, like `restore()`); a member that cannot go back is
+  named in the exception and stays under the entry, and so is a partial S3 copy
+  of the failed member; when everything went back the message says `moved
+  back: …`, `nothing was moved` only when nothing had (pass 2 N12).
+- **Active content is `attachment` on a presigned URL.** `S3TemporaryUrlOptions`
+  repeats core's `DeliveryOptions` rule with core's configured `ActiveMediaTypes`
+  (required constructor argument, autowired from core's binding — never a
+  default list, never a second param; never bind `ActiveMediaTypes::class`
+  here). A type that fails RFC 9110 grammar (`Url\WellFormedMediaType`)
+  is `application/octet-stream` + `attachment`, and `write()` stores no
+  `ContentType` for it — never strip CR/LF, it glues tokens (pass 2 N4). `write()` passes
+  the detected type as S3 `ContentType` — never a scriptable one: core keys
+  those `.bin` so a public bucket serves them as octet-stream, and storing
+  `image/svg+xml` would undo that (core review 1.0 B5). `putIfAbsent()` has no
+  media type.
+- **`publicBucket` is a statement, not a capability switch.** Both stores
+  implement core's `PubliclyReadableStoreInterface` for every adapter and answer
+  the flag (the CA store answers for the store it wraps) — that is a result, as
+  golden rule 3 asks, not a conditional interface. Only `filestorage:check`
+  reads it (`PublicBucketCheckTest` runs core's `CheckCommand` against both
+  stores). Never let it change URLs or write visibility, and never infer it from
+  `publicUrl()` — an S3 adapter builds that URL for a private bucket too.
 - **`objects()` takes `lastModified` / `size` from the listing.** Null stays
   null — the core sweep never deletes an undated object. Do not add a
   per-object `lastModified()` request, and never substitute "now" or 0.
@@ -174,7 +231,7 @@ unassigned variable, which is also null.
   it would make a retry after a failed write impossible.
 - **The unit suite runs on `league/flysystem-memory`.** It cannot exercise
   presigned URLs, multipart upload or eventual consistency. Anything in those
-  areas needs a case in `tests/Integration/`, which CI runs against MinIO in its
+  areas needs a case in `tests/Integration/`, which CI runs against SeaweedFS in its
   own job — and that job waits for the endpoint and fails if it never appears,
   because a suite that skips itself looks exactly like one that passed.
 - Code: `declare(strict_types=1)`, `final readonly class`, `#[\Override]`,
@@ -185,7 +242,7 @@ unassigned variable, which is also null.
   `ConfigWiringTest` exercises it through a real container instead.
 - `examples/` is part of the public contract: keep scripts runnable and update
   `examples/README.md` when example usage changes.
-- **CI workflows are SHA-pinned**, the MinIO service image by digest. Every
+- **CI workflows are SHA-pinned**, the SeaweedFS image by digest. Every
   `uses:` references a 40-char commit SHA with a `# vN` trailing comment; never
   revert to floating `@vN` tags. Workflows carry
   `permissions: { contents: read }` and `persist-credentials: false` on every
@@ -197,4 +254,4 @@ unassigned variable, which is also null.
   `llms.txt`, `resources/skills/*/SKILL.md` and `examples/` if usage changed;
   update `CHANGELOG.md` when releasing.
 - Re-run `make build` and, for anything touching S3 behaviour,
-  `make test-integration` against MinIO. Paste the output.
+  `make test-integration` against SeaweedFS. Paste the output.
