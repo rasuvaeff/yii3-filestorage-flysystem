@@ -25,6 +25,7 @@ use Rasuvaeff\Understudy\Invocation;
 use Rasuvaeff\Understudy\Understudy;
 use Rasuvaeff\Yii3Filestorage\Exception\StoreException;
 use Rasuvaeff\Yii3Filestorage\Exception\UploadSizeException;
+use Rasuvaeff\Yii3Filestorage\Mime\ActiveMediaTypes;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Store\ContentAddressableStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\MaintenanceStoreInterface;
@@ -356,7 +357,7 @@ final class FlysystemStoreTest
             'flysystem',
             $this->urlCapable($generator),
             Fixtures::factory(),
-            new S3TemporaryUrlOptions(),
+            new S3TemporaryUrlOptions(new ActiveMediaTypes()),
         );
 
         $url = $store->temporaryUrl(Fixtures::file(), new DateTimeImmutable('+1 hour'), Fixtures::deliveryOptions());
@@ -385,7 +386,7 @@ final class FlysystemStoreTest
             'flysystem',
             $this->urlCapable($generator),
             Fixtures::factory(),
-            new S3TemporaryUrlOptions(),
+            new S3TemporaryUrlOptions(new ActiveMediaTypes()),
         );
 
         Assert::null($store->publicUrl(Fixtures::file()));
@@ -410,7 +411,7 @@ final class FlysystemStoreTest
             'flysystem',
             $this->urlCapable($generator),
             Fixtures::factory(),
-            new S3TemporaryUrlOptions(),
+            new S3TemporaryUrlOptions(new ActiveMediaTypes()),
         );
 
         Assert::null($store->publicUrl(Fixtures::file()));
@@ -432,7 +433,7 @@ final class FlysystemStoreTest
             'flysystem',
             $this->urlCapable($generator),
             Fixtures::factory(),
-            new S3TemporaryUrlOptions(),
+            new S3TemporaryUrlOptions(new ActiveMediaTypes()),
         );
 
         Assert::null($store->publicUrl(Fixtures::file()));
@@ -618,6 +619,8 @@ final class FlysystemStoreTest
             // scriptable: left to the key's inert `.bin`, never stored as itself
             ['image/svg+xml', []],
             ['Text/HTML; charset=utf-8', []],
+            // any `*/*+xml` is scriptable since core 0.10
+            ['model/vnd.collada+xml', []],
         ];
         foreach ($cases as [$type, $expected]) {
             $configs = [];
@@ -668,7 +671,7 @@ final class FlysystemStoreTest
             'flysystem',
             Understudy::strict(Understudy::for(FilesystemOperator::class)),
             Fixtures::factory(),
-            new S3TemporaryUrlOptions(),
+            new S3TemporaryUrlOptions(new ActiveMediaTypes()),
         );
 
         Assert::null($store->publicUrl(Fixtures::file()));

@@ -24,24 +24,24 @@ use Rasuvaeff\Yii3Filestorage\Policy\DeliveryOptions;
  * always signed as `attachment`. An S3 response cannot carry
  * `X-Content-Type-Options: nosniff`, so a presigned URL serving an uploaded
  * SVG inline from a bucket on your domain is stored XSS (review 1.0 A5).
- * `DeliveryOptions` already forces the default list; this repeats the check
- * with the list you pass, so the extra types you give `-web` can be given
- * here too.
+ * `DeliveryOptions` already carries the decision made with the list it was
+ * built from; this repeats the check on the well-formed type with core's
+ * configured list — the instance core binds from its `activeMediaTypes`
+ * param — so the application's extras hold even for options built from the
+ * default list, and the PDF opt-out (`allowInline`) is not re-forced.
  *
  * @api
  */
 final readonly class S3TemporaryUrlOptions implements TemporaryUrlOptionsInterface
 {
-    private ActiveMediaTypes $activeTypes;
-
     /**
-     * @param ActiveMediaTypes|null $activeTypes Null is core's default list;
-     *        `ActiveMediaTypes::withExtra([...])` adds to it.
+     * @param ActiveMediaTypes $activeTypes Core's configured list: autowire it
+     *        (core binds `ActiveMediaTypes::class`) or pass the same instance.
+     *        No default on purpose — core's default keeps PDF forced and has
+     *        none of the application's extras, so falling back to it silently
+     *        disagreed with the proxy.
      */
-    public function __construct(?ActiveMediaTypes $activeTypes = null)
-    {
-        $this->activeTypes = $activeTypes ?? new ActiveMediaTypes();
-    }
+    public function __construct(private ActiveMediaTypes $activeTypes) {}
 
     #[Override]
     public function for(DeliveryOptions $options): array

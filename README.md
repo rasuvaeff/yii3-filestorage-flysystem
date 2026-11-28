@@ -209,24 +209,31 @@ it unbound.
 **Active content is never signed `inline`.** An S3 response cannot carry
 `X-Content-Type-Options: nosniff`, so an uploaded SVG or HTML file served inline
 from a bucket on your domain is stored XSS. Every type in core's
-`Mime\ActiveMediaTypes` (HTML, SVG, XML, script, PDF, …) is signed as
-`attachment` whatever the group's policy says; types you add to `-web` can be
-given here too:
+`Mime\ActiveMediaTypes` (HTML, SVG, XML and any `*/*+xml`, script, PDF, …) is
+signed as `attachment` whatever the group's policy says.
+
+The list is core's one configured instance, the same the `-web` proxy and
+`filestorage:check` use. You configure it in core's params, and the binding
+above autowires it into `S3TemporaryUrlOptions` (core binds
+`ActiveMediaTypes::class`):
 
 ```php
-use Rasuvaeff\Yii3Filestorage\Mime\ActiveMediaTypes;
-
-TemporaryUrlOptionsInterface::class => static fn (): TemporaryUrlOptionsInterface
-    => new S3TemporaryUrlOptions(ActiveMediaTypes::withExtra(
-        $params['rasuvaeff/yii3-filestorage-web']['extraActiveMediaTypes'],
-    )),
+'rasuvaeff/yii3-filestorage' => [
+    'activeMediaTypes' => [
+        'extra' => ['application/x-custom-script'], // forced to attachment everywhere
+        'allowInline' => ['application/pdf'],       // an inline group may show PDFs, presigned too
+    ],
+],
 ```
 
-The extra types are configured in two places — `-web`'s
-`extraActiveMediaTypes` param for the proxy, this constructor for presigned
-URLs — and a type added to only one of them is an attachment through the
-proxy and `inline` on a presigned URL. Build this one from `-web`'s param, as
-above, so there is a single list (core has no shared binding for it yet).
+The constructor takes the list and has no default: core's default keeps PDF
+forced and knows none of your extras, so a hand-built
+`new S3TemporaryUrlOptions()` used to drop the PDF opt-out silently. Writing
+the binding as a closure, ask for the instance —
+`static fn (ActiveMediaTypes $types) => new S3TemporaryUrlOptions($types)` —
+never build a second list. (Up to 0.4 this README built it from `-web`'s
+`extraActiveMediaTypes` param; `-web` 0.7 removed that param and refuses it at
+boot.)
 
 A stored media type that is not RFC 9110 grammar (`type/subtype`, optional
 `; name=value` parameters, ASCII) — a CR or LF in it included — is signed as
@@ -273,6 +280,7 @@ without both:
 ```php
 use League\Flysystem\FilesystemOperator;
 use Psr\Http\Message\StreamFactoryInterface;
+use Rasuvaeff\Yii3Filestorage\Mime\ActiveMediaTypes;
 use Rasuvaeff\Yii3Filestorage\Store\StoreInterface;
 use Rasuvaeff\Yii3FilestorageFlysystem\AdapterSemantics;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemContentAddressableStore;
@@ -283,12 +291,13 @@ return [
     StoreInterface::class => static fn (
         FilesystemOperator $filesystem,
         StreamFactoryInterface $streams,
+        ActiveMediaTypes $activeTypes, // core's configured list
     ): StoreInterface => new FlysystemContentAddressableStore(
         store: new FlysystemStore(
             name: 's3',
             filesystem: $filesystem,
             streamFactory: $streams,
-            temporaryUrlOptions: new S3TemporaryUrlOptions(),
+            temporaryUrlOptions: new S3TemporaryUrlOptions($activeTypes),
             quarantinePrefix: '.quarantine', // without one gc cannot collect blobs
             orderedListing: true,
         ),

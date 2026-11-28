@@ -7,6 +7,7 @@ use League\Flysystem\AwsS3V3\AwsS3V3Adapter;
 use League\Flysystem\Filesystem;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Rasuvaeff\Yii3Filestorage\File;
+use Rasuvaeff\Yii3Filestorage\Mime\ActiveMediaTypes;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryOptions;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicy;
@@ -49,7 +50,9 @@ $store = new FlysystemStore(
     name: 's3',
     filesystem: $filesystem,
     streamFactory: $factory,
-    temporaryUrlOptions: new S3TemporaryUrlOptions(),
+    // Core's default list here; in an application autowire it instead —
+    // core binds the instance configured by its activeMediaTypes param.
+    temporaryUrlOptions: new S3TemporaryUrlOptions(new ActiveMediaTypes()),
 );
 
 $result = $store->write(

@@ -8,6 +8,7 @@ use Aws\S3\S3Client;
 use DateTimeImmutable;
 use League\Flysystem\AwsS3V3\AwsS3V3Adapter;
 use Rasuvaeff\Yii3Filestorage\File;
+use Rasuvaeff\Yii3Filestorage\Mime\ActiveMediaTypes;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryOptions;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicy;
@@ -91,7 +92,7 @@ final class MinioIntegrationTest
             name: 'minio',
             filesystem: $this->filesystem,
             streamFactory: Fixtures::factory(),
-            temporaryUrlOptions: new S3TemporaryUrlOptions(),
+            temporaryUrlOptions: new S3TemporaryUrlOptions(new ActiveMediaTypes()),
             quarantinePrefix: self::QUARANTINE,
         );
     }

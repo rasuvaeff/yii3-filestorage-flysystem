@@ -193,8 +193,10 @@ unassigned variable, which is also null.
   of the failed member; when everything went back the message says `moved
   back: …`, `nothing was moved` only when nothing had (pass 2 N12).
 - **Active content is `attachment` on a presigned URL.** `S3TemporaryUrlOptions`
-  repeats core's `DeliveryOptions` rule with its own `ActiveMediaTypes` (extras
-  configurable). A type that fails RFC 9110 grammar (`Url\WellFormedMediaType`)
+  repeats core's `DeliveryOptions` rule with core's configured `ActiveMediaTypes`
+  (required constructor argument, autowired from core's binding — never a
+  default list, never a second param; never bind `ActiveMediaTypes::class`
+  here). A type that fails RFC 9110 grammar (`Url\WellFormedMediaType`)
   is `application/octet-stream` + `attachment`, and `write()` stores no
   `ContentType` for it — never strip CR/LF, it glues tokens (pass 2 N4). `write()` passes
   the detected type as S3 `ContentType` — never a scriptable one: core keys

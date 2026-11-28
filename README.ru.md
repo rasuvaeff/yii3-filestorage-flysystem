@@ -211,24 +211,31 @@ RFC 6266: ASCII-фолбэк, безопасный к кавычкам, плюс
 **Активный контент никогда не подписывается как `inline`.** Ответ S3 не может
 нести `X-Content-Type-Options: nosniff`, поэтому загруженный SVG или HTML,
 отданный inline из бакета на вашем домене, — это stored XSS. Каждый тип из
-`Mime\ActiveMediaTypes` ядра (HTML, SVG, XML, скрипты, PDF, …) подписывается
-как `attachment`, что бы ни говорила политика группы; типы, которые вы
-добавляете в `-web`, можно передать и сюда:
+`Mime\ActiveMediaTypes` ядра (HTML, SVG, XML и любой `*/*+xml`, скрипты, PDF,
+…) подписывается как `attachment`, что бы ни говорила политика группы.
+
+Список — один настроенный экземпляр ядра, тот же, что у прокси `-web` и
+`filestorage:check`. Настраивается он в params ядра, а привязка выше
+автоматически внедряет его в `S3TemporaryUrlOptions` (ядро биндит
+`ActiveMediaTypes::class`):
 
 ```php
-use Rasuvaeff\Yii3Filestorage\Mime\ActiveMediaTypes;
-
-TemporaryUrlOptionsInterface::class => static fn (): TemporaryUrlOptionsInterface
-    => new S3TemporaryUrlOptions(ActiveMediaTypes::withExtra(
-        $params['rasuvaeff/yii3-filestorage-web']['extraActiveMediaTypes'],
-    )),
+'rasuvaeff/yii3-filestorage' => [
+    'activeMediaTypes' => [
+        'extra' => ['application/x-custom-script'], // вложение везде
+        'allowInline' => ['application/pdf'],       // inline-группа может показывать PDF, и по presigned тоже
+    ],
+],
 ```
 
-Дополнительные типы настраиваются в двух местах — параметр
-`extraActiveMediaTypes` у `-web` для прокси и этот конструктор для presigned
-URL, — и тип, добавленный только в одно из них, через прокси уходит на
-скачивание, а по presigned URL — `inline`. Стройте этот список из параметра
-`-web`, как выше, чтобы список был один (общей привязки в ядре пока нет).
+Конструктор принимает список и значения по умолчанию не имеет: список ядра по
+умолчанию держит PDF принудительным вложением и не знает ваших дополнений,
+поэтому `new S3TemporaryUrlOptions()` вручную молча терял отказ от PDF. Если
+привязка пишется замыканием, запросите экземпляр —
+`static fn (ActiveMediaTypes $types) => new S3TemporaryUrlOptions($types)` — и
+не стройте второй список. (До 0.4 этот README строил его из параметра
+`extraActiveMediaTypes` у `-web`; `-web` 0.7 этот параметр убрал и отвергает
+при загрузке.)
 
 Сохранённый media type, не соответствующий грамматике RFC 9110
 (`type/subtype`, необязательные параметры `; name=value`, ASCII), — в том числе
@@ -277,6 +284,7 @@ new FlysystemStore('flysystem', $filesystem, $streams, publicBucket: true);
 ```php
 use League\Flysystem\FilesystemOperator;
 use Psr\Http\Message\StreamFactoryInterface;
+use Rasuvaeff\Yii3Filestorage\Mime\ActiveMediaTypes;
 use Rasuvaeff\Yii3Filestorage\Store\StoreInterface;
 use Rasuvaeff\Yii3FilestorageFlysystem\AdapterSemantics;
 use Rasuvaeff\Yii3FilestorageFlysystem\FlysystemContentAddressableStore;
@@ -287,12 +295,13 @@ return [
     StoreInterface::class => static fn (
         FilesystemOperator $filesystem,
         StreamFactoryInterface $streams,
+        ActiveMediaTypes $activeTypes, // core's configured list
     ): StoreInterface => new FlysystemContentAddressableStore(
         store: new FlysystemStore(
             name: 's3',
             filesystem: $filesystem,
             streamFactory: $streams,
-            temporaryUrlOptions: new S3TemporaryUrlOptions(),
+            temporaryUrlOptions: new S3TemporaryUrlOptions($activeTypes),
             quarantinePrefix: '.quarantine', // без него gc не соберёт блобы
             orderedListing: true,
         ),

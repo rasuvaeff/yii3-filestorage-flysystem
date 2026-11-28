@@ -4,12 +4,17 @@ declare(strict_types=1);
 
 namespace Rasuvaeff\Yii3FilestorageFlysystem\Tests;
 
+use DateTimeImmutable;
 use League\Flysystem\FilesystemOperator;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Psr\Http\Message\StreamFactoryInterface;
 use Rasuvaeff\Yii3Filestorage\Exception\InvalidConfigException;
+use Rasuvaeff\Yii3Filestorage\File;
+use Rasuvaeff\Yii3Filestorage\Mime\ActiveMediaTypes;
 use Rasuvaeff\Yii3Filestorage\Path\PathGeneratorInterface;
 use Rasuvaeff\Yii3Filestorage\Path\RandomPathGenerator;
+use Rasuvaeff\Yii3Filestorage\Policy\DeliveryOptions;
+use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicy;
 use Rasuvaeff\Yii3Filestorage\Repository\RepositoryInterface;
 use Rasuvaeff\Yii3Filestorage\StorageInterface;
 use Rasuvaeff\Yii3Filestorage\Store\Layout\DirectoryLayout;
@@ -70,10 +75,67 @@ final class ConfigWiringTest
     {
         $container = $this->container([
             TemporaryUrlOptionsInterface::class => static fn(): TemporaryUrlOptionsInterface
-                => new S3TemporaryUrlOptions(),
+                => new S3TemporaryUrlOptions(new ActiveMediaTypes()),
         ]);
 
         Assert::instanceOf($container->get(StoreInterface::class), FlysystemStore::class);
+    }
+
+    /**
+     * The README recipe — `TemporaryUrlOptionsInterface::class =>
+     * S3TemporaryUrlOptions::class` — has to get core's one configured
+     * `ActiveMediaTypes` (bound by core's `config/di.php` from its
+     * `activeMediaTypes` param), or the PDF opt-out and the application's
+     * extras stop at the proxy and never reach a presigned URL.
+     */
+    public function theRecipeTakesCoresConfiguredActiveList(): void
+    {
+        $core = __DIR__ . '/../vendor/rasuvaeff/yii3-filestorage/config';
+        $params = require $core . '/params.php';
+        $params['rasuvaeff/yii3-filestorage']['activeMediaTypes'] = [
+            'extra' => ['application/x-custom-script'],
+            'allowInline' => ['application/pdf'],
+        ];
+        $coreDefinitions = (static fn(array $params): array => require $core . '/di.php')($params);
+        $container = $this->container([
+            ActiveMediaTypes::class => $coreDefinitions[ActiveMediaTypes::class],
+            TemporaryUrlOptionsInterface::class => S3TemporaryUrlOptions::class,
+        ]);
+        $configured = $container->get(ActiveMediaTypes::class);
+        $urlOptions = $container->get(TemporaryUrlOptionsInterface::class);
+        $disposition = static fn(string $name, string $mimeType): string => (string) ($urlOptions->for(
+            DeliveryOptions::fromFile(
+                File::create(
+                    id: 'file-1',
+                    storeName: 'flysystem',
+                    groupName: 'common',
+                    relativePath: 'common/a/b/original.bin',
+                    originalName: $name,
+                    size: 1,
+                    createdAt: new DateTimeImmutable('2026-01-01T00:00:00.000000+00:00'),
+                    mimeType: $mimeType,
+                ),
+                new DeliveryPolicy(allowDirectPublicUrl: false, forceDownload: false),
+                $configured,
+            ),
+        )['get_object_options']['ResponseContentDisposition'] ?? '');
+
+        Assert::string($disposition('report.pdf', 'application/pdf'))->contains('inline;');
+        Assert::string($disposition('x.cs', 'application/x-custom-script'))->contains('attachment;');
+    }
+
+    /**
+     * No default list to fall back on: core's default keeps PDF forced, so a
+     * hand-built `new S3TemporaryUrlOptions(new ActiveMediaTypes())` silently dropped the PDF
+     * opt-out, and with options built from the default list an application's
+     * extras too. The configured instance has to be passed — or autowired.
+     */
+    public function theOptionsCannotBeBuiltWithoutTheConfiguredList(): void
+    {
+        $parameter = new \ReflectionParameter([S3TemporaryUrlOptions::class, '__construct'], 'activeTypes');
+
+        Assert::false($parameter->isOptional());
+        Assert::false($parameter->allowsNull());
     }
 
     /**

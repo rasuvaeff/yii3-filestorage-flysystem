@@ -25,7 +25,7 @@ final class S3TemporaryUrlOptionsTest
     #[BeforeTest]
     public function setUp(): void
     {
-        $this->options = new S3TemporaryUrlOptions();
+        $this->options = new S3TemporaryUrlOptions(new ActiveMediaTypes());
     }
 
     public function mapsOntoTheKeyTheS3AdapterReads(): void
@@ -67,7 +67,9 @@ final class S3TemporaryUrlOptionsTest
      */
     public function activeContentIsSignedAsAnAttachment(): void
     {
-        foreach (['image/svg+xml', 'text/html', 'application/xhtml+xml', 'text/javascript'] as $type) {
+        // `model/vnd.collada+xml` is on no list: core 0.10 treats every
+        // `*/*+xml` as XML, which a browser renders and runs script in.
+        foreach (['image/svg+xml', 'text/html', 'application/xhtml+xml', 'text/javascript', 'model/vnd.collada+xml'] as $type) {
             $config = $this->options->for($this->deliveryOf('x', forceDownload: false, mimeType: $type));
 
             Assert::string((string) ($config['get_object_options']['ResponseContentDisposition'] ?? ''))
@@ -91,6 +93,23 @@ final class S3TemporaryUrlOptionsTest
         Assert::string((string) ($this->options->for(
             $this->deliveryOf('x.cs', forceDownload: false, mimeType: 'application/x-custom-script'),
         )['get_object_options']['ResponseContentDisposition'] ?? ''))->contains('inline;');
+    }
+
+    /**
+     * Core's PDF opt-out (`activeMediaTypes.allowInline`) is decided once, in
+     * the `DeliveryOptions` the facade builds from the configured list. A
+     * store re-checking with core's *default* list re-forced the PDF, so the
+     * opt-out never reached a presigned URL (review 1.0 pass 2, core N4).
+     */
+    public function thePdfOptOutReachesThePresignedUrl(): void
+    {
+        $list = ActiveMediaTypes::fromConfig(['extra' => [], 'allowInline' => ['application/pdf']]);
+        $options = new S3TemporaryUrlOptions($list);
+
+        $config = $options->for($this->deliveryOf('report.pdf', forceDownload: false, activeMediaTypes: $list));
+
+        Assert::string((string) ($config['get_object_options']['ResponseContentDisposition'] ?? ''))
+            ->contains('inline; filename="report.pdf"');
     }
 
     /**
@@ -179,6 +198,7 @@ final class S3TemporaryUrlOptionsTest
         string $name,
         bool $forceDownload = true,
         string $mimeType = 'application/pdf',
+        ?ActiveMediaTypes $activeMediaTypes = null,
     ): DeliveryOptions {
         return DeliveryOptions::fromFile(
             file: File::create(
@@ -192,6 +212,7 @@ final class S3TemporaryUrlOptionsTest
                 mimeType: $mimeType,
             ),
             policy: new DeliveryPolicy(allowDirectPublicUrl: false, forceDownload: $forceDownload),
+            activeMediaTypes: $activeMediaTypes,
         );
     }
 }

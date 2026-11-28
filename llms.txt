@@ -144,10 +144,11 @@ interface TemporaryUrlOptionsInterface
 `['get_object_options' => ['ResponseContentType' => …, 'ResponseContentDisposition' => …]]`,
 which `AwsS3V3Adapter::temporaryUrl()` signs into the presigned `GetObject`.
 Disposition follows RFC 6266: a quote-safe ASCII `filename` plus a
-percent-encoded `filename*`. `new S3TemporaryUrlOptions(?ActiveMediaTypes $activeTypes = null)`:
-every active type is `attachment` whatever the policy (default list, or
-`ActiveMediaTypes::withExtra([...])` — build it from `-web`'s
-`extraActiveMediaTypes` param so proxy and presign share one list). A type that
+percent-encoded `filename*`. `new S3TemporaryUrlOptions(ActiveMediaTypes $activeTypes)`
+(required, no default — autowire it: core binds the instance configured by its
+`activeMediaTypes` param, `extra` + `allowInline`, the same the `-web` proxy
+uses): every active type (any `*/*+xml` too) is `attachment` whatever the
+policy; a PDF is inline only under `allowInline: ['application/pdf']`. A type that
 is not RFC 9110 `type/subtype *(; name=value)` (CR/LF included) is signed as
 `application/octet-stream` + `attachment`, never cleaned (stripping glued
 tokens: review pass 2 N4); `write()` then stores no `ContentType`.
